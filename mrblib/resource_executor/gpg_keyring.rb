@@ -4,13 +4,12 @@ module ::MItamae
       class GpgKeyring < ::MItamae::ResourceExecutor::File
         private
 
-        @homedir = ''
         @tempfile = nil
 
-        def gpg(args)
+        def gpg(homedir, args)
           [
             'gpg',
-            '--homedir', @homedir,
+            '--homedir', homedir,
             '--quiet',
             '--batch',
             '--with-colons',
@@ -22,12 +21,11 @@ module ::MItamae
             raise "`gpg` command is not available. Please install gnupg to use mitamae's gpg_keyring."
           end
 
-          @homedir = Dir.mktmpdir
-          run_command(gpg(['--list-keys']))
+          if run_command(['which', 'curl'], error: false).exit_status != 0
+            raise "`curl` command is not available. Please install curl to use mitamae's gpg_keyring."
+          end
 
           super
-
-          run_specinfra(:remove_file, @homedir)
         end
 
         def set_desired_attributes(desired, action)
@@ -50,20 +48,26 @@ module ::MItamae
 
           return unless current.exist
 
-          result = run_command(gpg(['--import', attributes.path]), error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg import key: #{attributes.path}"
-          end
+          lines = []
 
-          result = run_command(gpg(['--fingerprint']), error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg show fingerprint"
-          end
+          Dir.mktmpdir{|homedir|
+            result = run_command(gpg(homedir, ['--import', attributes.path]), error: false)
+            if result.exit_status != 0
+              raise MItamae::Backend::CommandExecutionError, "gpg import key: #{attributes.path}"
+            end
+
+            result = run_command(gpg(homedir, ['--fingerprint']), error: false)
+            if result.exit_status != 0
+              raise MItamae::Backend::CommandExecutionError, "gpg show fingerprint"
+            end
+
+            lines = result.stdout.lines
+          }
 
           before = nil
           pub_fprs = []
           sub_fprs = []
-          result.stdout.lines.each do |line|
+          lines.each do |line|
             entry = line.strip.split(':')
             case entry[0]
             when 'tru'
@@ -94,71 +98,58 @@ module ::MItamae
           MItamae.logger.debug "fingerprint: #{current.fingerprint}"
         end
 
-        def pre_action
-          if !current.exist or current.fingerprint != desired.fingerprint
-            if desired.url
-              content = download_url(desired.url, desired.fingerprint)
-            elsif desired.keyserver
-              content = download_keyserver(desired.keyserver, desired.fingerprint)
-            end
-
-            Dir.mkdir(File.join(@homedir, 'download'), 0755)
-            File.open(File.join(@homedir, 'download', desired.fingerprint), 'w') do |f|
-              f.write(content)
-            end
-            @tempfile = File.join(@homedir, 'download', desired.fingerprint)
-          end
-
-          super
-        end
-
         def content_file
           @tempfile
         end
 
-        def download_url(url, fingerprint)
-          MItamae.logger.debug "gpg download url: #{url}"
+        def pre_action
+          Dir.mktmpdir{|homedir|
+            if (!desired.content and !current.exist) or current.fingerprint != desired.fingerprint
+              if desired.url
+                MItamae.logger.debug "gpg download url: #{desired.url}"
 
-          if run_command(['which', 'curl'], error: false).exit_status != 0
-            raise "`curl` command is not available. Please install curl to use mitamae's gpg_keyring."
-          end
+                result = run_command(['curl', '-fsSL', '-o', "/tmp/#{desired.fingerprint}", desired.url], error: false)
+                if result.exit_status != 0
+                  raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{desired.url}"
+                end
 
-          result = run_command(['curl', '-fsSL', '-o', "/tmp/#{fingerprint}", url], error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{url}"
-          end
+                result = run_command(gpg(homedir, ['--import', "/tmp/#{desired.fingerprint}"]), error: false)
+                if result.exit_status != 0
+                  raise MItamae::Backend::CommandExecutionError, "gpg import key: fingerprint: #{desired.fingerprint}"
+                end
+              else
+                MItamae.logger.debug "gpg download keyserver: #{desired.keyserver}"
 
-          result = run_command(gpg(['--import', "/tmp/#{fingerprint}"]), error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg import key: url: #{url} fingerprint: #{fingerprint}"
-          end
+                File.open(File.join(homedir, 'gpg.conf'), 'w') do |f|
+                  f.write("keyserver #{desired.keyserver}")
+                end
 
-          result = run_command(gpg(['--export', '--armor', fingerprint]), error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg export key: url: #{url} fingerprint: #{fingerprint}"
-          end
+                result = run_command(gpg(homedir, ['--receive-keys', desired.fingerprint]), error: false)
+                if result.exit_status != 0
+                  raise MItamae::Backend::CommandExecutionError, "gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}"
+                end
+              end
 
-          result.stdout
-        end
+              if File.extname(attributes.path).eql?('.gpg')
+                opts = ['--export', desired.fingerprint]
+              else
+                opts = ['--export', '--armor', desired.fingerprint]
+              end
 
-        def download_keyserver(keyserver, fingerprint)
-          MItamae.logger.debug "gpg download keyserver: #{keyserver} fingerprint: #{fingerprint}"
+              result = run_command(gpg(homedir, opts), error: false)
+              if result.exit_status != 0
+                raise MItamae::Backend::CommandExecutionError, "gpg export key: fingerprint: #{desired.fingerprint}"
+              end
 
-          File.open(File.join(@homedir, 'gpg.conf'), 'w') do |f|
-            f.write("keyserver #{keyserver}")
-          end
+              Dir.mkdir(File.join(homedir, 'download'), 0755)
+              File.open(File.join(homedir, 'download', desired.fingerprint), 'w') do |f|
+                f.write(result.stdout)
+              end
+              @tempfile = File.join(homedir, 'download', desired.fingerprint)
+            end
 
-          result = run_command(gpg(['--receive-keys', fingerprint]), error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg download key: keyserver: #{keyserver} fingerprint: #{fingerprint}"
-          end
-
-          result = run_command(gpg(['--export', '--armor', fingerprint]), error: false)
-          if result.exit_status != 0
-            raise MItamae::Backend::CommandExecutionError, "gpg export key: keyserver: #{keyserver} fingerprint: #{fingerprint}"
-          end
-
-          result.stdout
+            super
+          }
         end
       end
     end
