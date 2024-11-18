@@ -97,7 +97,7 @@ module ::MItamae
         def pre_action
           if !current.exist or current.fingerprint != desired.fingerprint
             if desired.url
-              content = download_url(desired.url)
+              content = download_url(desired.url, desired.fingerprint)
             elsif desired.keyserver
               content = download_keyserver(desired.keyserver, desired.fingerprint)
             end
@@ -116,16 +116,26 @@ module ::MItamae
           @tempfile
         end
 
-        def download_url(url)
+        def download_url(url, fingerprint)
           MItamae.logger.debug "gpg download url: #{url}"
 
           if run_command(['which', 'curl'], error: false).exit_status != 0
             raise "`curl` command is not available. Please install curl to use mitamae's gpg_keyring."
           end
 
-          result = run_command(['curl', '-fsSL', url], error: false)
+          result = run_command(['curl', '-fsSL', '-o', "/tmp/#{fingerprint}", url], error: false)
           if result.exit_status != 0
             raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{url}"
+          end
+
+          result = run_command(gpg(['--import', "/tmp/#{fingerprint}"]), error: false)
+          if result.exit_status != 0
+            raise MItamae::Backend::CommandExecutionError, "gpg import key: url: #{url} fingerprint: #{fingerprint}"
+          end
+
+          result = run_command(gpg(['--export', '--armor', fingerprint]), error: false)
+          if result.exit_status != 0
+            raise MItamae::Backend::CommandExecutionError, "gpg export key: url: #{url} fingerprint: #{fingerprint}"
           end
 
           result.stdout
