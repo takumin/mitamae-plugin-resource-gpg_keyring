@@ -1,0 +1,3 @@
+/.plugins/
+/test/temporary/*
+!/test/temporary/.gitkeep
