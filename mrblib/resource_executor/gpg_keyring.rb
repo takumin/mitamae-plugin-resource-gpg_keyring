@@ -33,7 +33,10 @@ module ::MItamae
         def set_desired_attributes(desired, action)
           super
 
-          desired.fingerprint = desired.fingerprint.strip.delete(' ')
+          desired.fingerprint = desired.fingerprint.strip.upcase.delete(' ').delete_prefix('0X')
+          if desired.fingerprint.length != 40
+            raise 'unknown fingerprint'
+          end
           MItamae.logger.debug "fingerprint: #{desired.fingerprint}"
 
           if !desired.keyserver
