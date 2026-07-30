@@ -158,6 +158,11 @@ module ::MItamae
         def set_current_attributes(current, action)
           super
 
+          # Deletion only cares whether the file exists: reading and
+          # asserting the key here would just block removing an obsolete
+          # keyring (e.g. one whose asserted uid has since been revoked).
+          return if action == :delete
+
           return unless current.exist
 
           lines = []
@@ -224,7 +229,9 @@ module ::MItamae
 
         def pre_action
           Dir.mktmpdir{|homedir|
-            if (!desired.content and !current.exist) or current.fingerprint != desired.fingerprint
+            # desired.exist is false for the delete action: nothing to
+            # fetch when the file is being removed.
+            if desired.exist and ((!desired.content and !current.exist) or current.fingerprint != desired.fingerprint)
               if desired.url
                 MItamae.logger.debug "gpg download url: #{desired.url}"
 
