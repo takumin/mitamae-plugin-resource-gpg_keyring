@@ -1,5 +1,5 @@
 RSpec.describe 'gpg_keyring' do
-  VALID_KEY_FINGERPRINT = '789ACEE7FE33FEACDF042B8BC0A90B87712D6C7F'.freeze
+  VALID_KEY_FINGERPRINT = 'EB7799FC07E9E5BEF41905894072ADEA8961DFD8'.freeze
 
   describe 'existing keyring' do
     {
@@ -49,6 +49,19 @@ RSpec.describe 'gpg_keyring' do
       keyring = temporary('url-download.gpg')
       expect(armored?(keyring)).to be(false)
       expect(fingerprint_of(keyring)).to eq(VALID_KEY_FINGERPRINT)
+    end
+  end
+
+  describe 'ed25519 key' do
+    it 'places an ECC key through the whole fetch pipeline' do
+      skip 'GnuPG 1.4 has no ECC support' if legacy_gpg?
+
+      run = run_mitamae('ed25519_key')
+      expect_mitamae_success(run)
+
+      keyring = temporary('ed25519.gpg')
+      expect(armored?(keyring)).to be(false)
+      expect(fingerprint_of(keyring)).to eq('177ACBBF0F0DF7E60E58ACD618DE04FD1CEFC6E4')
     end
   end
 

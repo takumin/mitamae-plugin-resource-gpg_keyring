@@ -84,6 +84,36 @@ module GpgKeyringSpecHelper
     File.symlink('..', File.join(plugins_dir, File.basename(ROOT_DIR)))
   end
 
+  # --- legacy GnuPG -------------------------------------------------------
+
+  # LEGACY_GPG=/usr/bin/gpg1 runs the whole suite against an old GnuPG.
+  # The resource always calls plain `gpg`, so the binary is swapped by
+  # putting a shim directory in front of mitamae's PATH; the inspection
+  # helpers below keep calling the modern gpg from this process' own PATH,
+  # which is what makes examples verifiable at all (GnuPG 1.4 has no
+  # --show-keys). The committed fixtures are RSA so that a legacy run has
+  # keys it can read - only the ed25519 example opts out.
+  def legacy_gpg?
+    !ENV['LEGACY_GPG'].nil?
+  end
+
+  def legacy_shim_dir
+    @legacy_shim_dir ||= begin
+      dir = File.join(BIN_DIR, 'legacy-shim')
+      FileUtils.mkdir_p(dir)
+      shim = File.join(dir, 'gpg')
+      FileUtils.rm_f(shim)
+      FileUtils.ln_s(File.expand_path(ENV.fetch('LEGACY_GPG')), shim)
+      dir
+    end
+  end
+
+  def mitamae_env
+    return {} unless legacy_gpg?
+
+    { 'PATH' => "#{legacy_shim_dir}#{File::PATH_SEPARATOR}#{ENV.fetch('PATH', '')}" }
+  end
+
   # --- running mitamae ----------------------------------------------------
 
   def recipe_path(name)
@@ -92,7 +122,7 @@ module GpgKeyringSpecHelper
 
   def run_mitamae(recipe_name)
     log, status = Open3.capture2e(
-      mitamae_bin, 'local', '--log-level=debug', '--plugins=.plugins',
+      mitamae_env, mitamae_bin, 'local', '--log-level=debug', '--plugins=.plugins',
       recipe_path(recipe_name), chdir: ROOT_DIR
     )
     MitamaeRun.new(log, status)
@@ -155,6 +185,9 @@ RSpec.configure do |config|
   config.before(:suite) do
     GpgKeyringSpecHelper.ensure_plugins
     GpgKeyringSpecHelper.mitamae_bin
+    if GpgKeyringSpecHelper.legacy_gpg?
+      warn "gpg under test: #{`#{ENV.fetch('LEGACY_GPG')} --version`.lines.first}"
+    end
     $local_key_server = LocalKeyServer.new(
       GpgKeyringSpecHelper::LOCAL_SERVER_HOST,
       GpgKeyringSpecHelper::LOCAL_SERVER_PORT,
