@@ -108,10 +108,42 @@ module GpgKeyringSpecHelper
     end
   end
 
-  def mitamae_env
-    return {} unless legacy_gpg?
+  # The gpg under test, before any shim is put in front of it.
+  def real_gpg
+    ENV['LEGACY_GPG'] || which('gpg')
+  end
 
-    { 'PATH' => "#{legacy_shim_dir}#{File::PATH_SEPARATOR}#{ENV.fetch('PATH', '')}" }
+  # Puts a throwaway `gpg` in front of mitamae for the duration of the
+  # block, answering --version with the given shell snippet and handing
+  # every other call to the real binary. Banners no real gpg prints are
+  # the only way to drive the version check from a spec.
+  def with_gpg_stub(version_branch)
+    dir = File.join(BIN_DIR, 'gpg-stub')
+    FileUtils.mkdir_p(dir)
+    stub = File.join(dir, 'gpg')
+    File.write(stub, <<~SCRIPT)
+      #!/bin/sh
+      if [ "$1" = "--version" ]; then
+        #{version_branch}
+        exit 0
+      fi
+      exec #{real_gpg} "$@"
+    SCRIPT
+    FileUtils.chmod(0o755, stub)
+    @gpg_stub_dir = dir
+    yield
+  ensure
+    @gpg_stub_dir = nil
+    FileUtils.rm_rf(dir)
+  end
+
+  def mitamae_env
+    dirs = []
+    dirs << @gpg_stub_dir if @gpg_stub_dir
+    dirs << legacy_shim_dir if legacy_gpg?
+    return {} if dirs.empty?
+
+    { 'PATH' => (dirs + [ENV.fetch('PATH', '')]).join(File::PATH_SEPARATOR) }
   end
 
   # --- running mitamae ----------------------------------------------------

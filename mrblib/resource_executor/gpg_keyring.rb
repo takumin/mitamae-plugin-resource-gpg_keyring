@@ -101,15 +101,23 @@ module ::MItamae
         # failing later as an unknown-option error from inside a fetch.
         def verify_gpg_version
           result = run_command(['gpg', '--version'], error: false)
-          version = result.exit_status == 0 ? result.stdout.lines.first.to_s[/\d+\.\d+(\.\d+)?/] : nil
+          # Anchored to GnuPG's own banner ("gpg (GnuPG) 2.4.4", or
+          # "gpg (GnuPG/MacGPG2) 2.2.41" once repackaged) rather than to
+          # the first number on the first line: a wrapper that announces
+          # itself first would otherwise have its own version read as
+          # gpg's and get a perfectly good binary refused.
+          match = result.exit_status == 0 ? /\(GnuPG[^)]*\)\s+(\d+\.\d+(\.\d+)?)/.match(result.stdout) : nil
 
-          if version.nil?
-            # Repackaged and wrapped builds print their own banners.
-            # Refusing to run on an unreadable version would be worse than
-            # letting the actual gpg invocations speak for themselves.
+          if match.nil?
+            # A build that prints no recognizable banner is left alone.
+            # Refusing to run on a version that cannot be read would be
+            # worse than letting the actual gpg invocations speak for
+            # themselves.
             MItamae.logger.debug 'could not read the gpg version, skipping the minimum version check'
             return
           end
+
+          version = match[1]
 
           MItamae.logger.debug "gpg version: #{version}"
           return if version_at_least?(version, MINIMUM_GPG_VERSION)
