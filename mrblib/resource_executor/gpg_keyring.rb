@@ -53,6 +53,39 @@ module ::MItamae
           ].concat(args)
         end
 
+        # Parses `gpg --with-colons` key listing lines into one record per
+        # pub key: { fingerprint:, uids:, sub_fingerprints: }. uid and sub
+        # entries belong to the pub record they follow.
+        def parse_colons(lines)
+          records = []
+          record = nil
+          section = nil
+          lines.each do |line|
+            entry = line.strip.split(':')
+            case entry[0]
+            when 'pub'
+              record = { fingerprint: nil, uids: [], sub_fingerprints: [] }
+              records << record
+              section = 'pub'
+            when 'sub'
+              section = 'sub'
+            when 'fpr'
+              case section
+              when 'pub'
+                record[:fingerprint] = entry[9]
+              when 'sub'
+                record[:sub_fingerprints] << entry[9]
+              else
+                raise 'unknown type'
+              end
+              section = nil
+            when 'uid'
+              record[:uids] << entry[9] if record
+            end
+          end
+          records
+        end
+
         def run_action(action)
           if run_command(['which', 'gpg'], error: false).exit_status != 0
             raise "`gpg` command is not available. Please install gnupg to use mitamae's gpg_keyring."
@@ -101,37 +134,15 @@ module ::MItamae
             lines = result.stdout.lines
           }
 
-          before = nil
-          pub_fprs = []
-          sub_fprs = []
-          lines.each do |line|
-            entry = line.strip.split(':')
-            case entry[0]
-            when 'tru'
-              # nothing...
-            when 'uid'
-              current.user_id = entry[9]
-            when 'pub', 'sub'
-              before = entry[0]
-            when 'fpr'
-              case before
-              when 'pub'
-                pub_fprs << entry[9]
-              when 'sub'
-                sub_fprs << entry[9]
-              else
-                raise 'unknown type'
-              end
-              before = nil
-            end
-          end
+          records = parse_colons(lines)
 
           # TODO: multiple pub/sub keys
-          if pub_fprs.length == 1
-            current.fingerprint = pub_fprs[0]
+          if records.length == 1
+            current.fingerprint = records[0][:fingerprint]
           else
             raise 'multiple pub keys'
           end
+          current.user_id = records[0][:uids].last
           MItamae.logger.debug "fingerprint: #{current.fingerprint}"
         end
 
