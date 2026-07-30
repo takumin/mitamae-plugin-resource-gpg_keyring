@@ -80,7 +80,10 @@ module ::MItamae
               end
               section = nil
             when 'uid'
-              record[:uids] << entry[9] if record
+              # A whitelist of "valid" states would break on placed files:
+              # without a trustdb every live uid lists as '-' (unknown), so
+              # only the states that mark a uid as dead are excluded.
+              record[:uids] << entry[9] if record && !%w[r e].include?(entry[1])
             end
           end
           records

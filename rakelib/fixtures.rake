@@ -107,6 +107,15 @@ FIXTURES = {
     target
   end,
 
+  # A key whose valid uid is listed first and whose revoked uid is last.
+  'revoked-uid.asc' => lambda do |gpg, path|
+    key = gpg.generate_key('Valid <valid@example.com>')
+    gpg.add_uid(key, 'Old <old@example.com>')
+    gpg.revoke_uid(key, 'Old <old@example.com>')
+    gpg.export(key, to: path)
+    key
+  end,
+
 }
 
 namespace :fixtures do
