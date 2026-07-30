@@ -134,14 +134,24 @@ needs no token — and every one of these lists pages, so walk them:
       done
     }
 
+    # Every lookup is captured whole before anything reads it, so a list
+    # that failed halfway stops the check. `paged ... | jq ...` cannot do
+    # that: a pipeline reports the status of its *last* command, so
+    # paged's `return 1` is discarded and jq's happy exit stands in for
+    # it - leaving a truncated list that reads like a complete one.
+    head=$(curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r '.head.sha // empty')
+    plus1=$(paged "$repo/issues/$n/reactions" "content=%2B1") || exit 1
+    comments=$(paged "$repo/issues/$n/comments")              || exit 1
+    reviews=$(paged "$repo/pulls/$n/reviews")                 || exit 1
+    [ -n "$head" ] || { echo "github api: no head sha" >&2; exit 1; }
+
     # is there a 👍 from the bot?
-    paged "$repo/issues/$n/reactions" "content=%2B1" |
-      jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at'
+    jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at' <<<"$plus1"
 
     # what was the newest verdict, on which revision?
-    curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r .head.sha
-    { paged "$repo/issues/$n/comments" | jq -c '. + {verdict:"clean"}'
-      paged "$repo/pulls/$n/reviews"   | jq -c '. + {verdict:"findings"}'; } |
+    echo "$head"
+    { jq -c '. + {verdict:"clean"}'    <<<"$comments"
+      jq -c '. + {verdict:"findings"}' <<<"$reviews"; } |
       jq -r 'select(.user.login=="chatgpt-codex-connector[bot]")
            | (.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) as $s
            | select($s != null)
@@ -181,7 +191,12 @@ moment.
 which is exactly the case that ends in a merge.
 
 A failed lookup is not the same answer as an empty one: treat it as "not
-known", never as "no approval". Unauthenticated polling gets 60 requests
+known", never as "no approval". That distinction only survives if the
+failure is allowed to reach you, which is why the lookups above are run
+as a script — `bash -c` or a file, not pasted line by line into a live
+shell, where `exit 1` would close the shell rather than abandon the
+check, and where a `||` that never fires is easy not to notice.
+Unauthenticated polling gets 60 requests
 an hour, and a round over both PRs costs roughly ten, so this is a real
 ceiling rather than a theoretical one — pass `-H "Authorization: Bearer
 $GITHUB_TOKEN"` when a token is around and the limit is 5000 instead.
