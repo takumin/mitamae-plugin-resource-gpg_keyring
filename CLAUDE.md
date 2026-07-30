@@ -73,9 +73,11 @@ marked ready for review, or on an `@codex review` comment, and says where
 it is with reactions on the PR itself, left by
 `chatgpt-codex-connector[bot]`:
 
-- 👀 — review running. Nothing to do but wait.
+- 👀 — review running. Nothing to do but wait; the bot takes it back
+  when the review ends.
 - 👍 — review finished and found nothing.
-- Findings arrive as review comments instead.
+- Findings arrive as review comments instead, with no reaction left
+  behind.
 
 After pushing a fix for a review comment, do all three, in this order:
 reply on the thread explaining the fix, mark that thread resolved, then
@@ -94,4 +96,9 @@ neither the PR payload nor `issue_read` says who reacted, only how many
 did. Read the authors from the reactions API — this repository is public,
 so it needs no token:
 
-    curl -sS https://api.github.com/repos/takumin/mitamae-plugin-resource-gpg_keyring/issues/<number>/reactions
+    curl -sS "https://api.github.com/repos/takumin/mitamae-plugin-resource-gpg_keyring/issues/<number>/reactions?content=%2B1&per_page=100"
+
+The query string is not decoration. That endpoint returns 30 reactions
+per page by default, so on a busy PR a 👍 can sit past the first page and
+read as no 👍 at all — which fails in the direction of waiting forever.
+Drop the `content` filter to see every reaction instead of only 👍.
