@@ -2,6 +2,21 @@ module ::MItamae
   module Plugin
     module ResourceExecutor
       class GpgKeyring < ::MItamae::ResourceExecutor::File
+        # import-minimal does not affect what gets exported (export-minimal
+        # already decides that); it is here to bound the cost of importing a
+        # poisoned key that carries tens of thousands of third-party
+        # signatures, which makes a plain import effectively hang. Keys can
+        # come from arbitrary URLs, so this is a deliberate defense, not
+        # redundancy. self-sigs-only would be the precise tool but is
+        # missing from older GnuPG; import-minimal (GnuPG >= 1.4.3) is the
+        # portable equivalent.
+        IMPORT_OPTIONS = ['--import-options', 'import-minimal'].freeze
+
+        # --receive-keys takes its import options from --keyserver-options,
+        # not from --import-options (see gpg(1) on keyserver-options:
+        # "Valid import-options or export-options may be used here as well").
+        KEYSERVER_IMPORT_OPTIONS = ['--keyserver-options', 'import-minimal'].freeze
+
         private
 
         @tempfile = nil
@@ -51,7 +66,7 @@ module ::MItamae
           lines = []
 
           Dir.mktmpdir{|homedir|
-            result = run_command(gpg(homedir, ['--import', attributes.path]), error: false)
+            result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', attributes.path]), error: false)
             if result.exit_status != 0
               raise MItamae::Backend::CommandExecutionError, "gpg import key: #{attributes.path}"
             end
@@ -113,7 +128,7 @@ module ::MItamae
                   raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{desired.url}"
                 end
 
-                result = run_command(gpg(homedir, ['--import', "/tmp/#{desired.fingerprint}"]), error: false)
+                result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', "/tmp/#{desired.fingerprint}"]), error: false)
                 if result.exit_status != 0
                   raise MItamae::Backend::CommandExecutionError, "gpg import key: fingerprint: #{desired.fingerprint}"
                 end
@@ -124,7 +139,7 @@ module ::MItamae
                   f.write("keyserver #{desired.keyserver}")
                 end
 
-                result = run_command(gpg(homedir, ['--receive-keys', desired.fingerprint]), error: false)
+                result = run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--receive-keys', desired.fingerprint]), error: false)
                 if result.exit_status != 0
                   raise MItamae::Backend::CommandExecutionError, "gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}"
                 end
