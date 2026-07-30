@@ -106,7 +106,8 @@ signal, and both have to be checked:
 
 So a fix pushed for review feedback always has to earn a new 👍 through
 `@codex review` — which is why that step is not optional. Merge with a
-merge commit, matching the existing history.
+merge commit, matching the existing history, and bind the merge to the
+revision that was checked rather than to whatever the tip is by then.
 
 Reactions never arrive over webhooks the way comments and checks do, so a
 👍 is only seen by looking for it. Polling the PR is not enough either:
@@ -139,10 +140,15 @@ needs no token — and every one of these lists pages, so walk them:
     # that: a pipeline reports the status of its *last* command, so
     # paged's `return 1` is discarded and jq's happy exit stands in for
     # it - leaving a truncated list that reads like a complete one.
-    head=$(curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r '.head.sha // empty')
     plus1=$(paged "$repo/issues/$n/reactions" "content=%2B1") || exit 1
     comments=$(paged "$repo/issues/$n/comments")              || exit 1
     reviews=$(paged "$repo/pulls/$n/reviews")                 || exit 1
+    # Read the head *after* the lists, never before. A push that lands
+    # while they are being walked then leaves the head newer than anything
+    # the verdicts can name, so the check reads "not approved". Read it
+    # first and that same push reads as approved - for the revision it
+    # just replaced.
+    head=$(curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r '.head.sha // empty')
     [ -n "$head" ] || { echo "github api: no head sha" >&2; exit 1; }
 
     # is there a 👍 from the bot?
@@ -157,10 +163,25 @@ needs no token — and every one of these lists pages, so walk them:
            | select($s != null)
            | [(.submitted_at // .created_at), .verdict, $s] | @tsv' | sort | tail -1
 
-That last line has to read `clean` and name the head sha. The `verdict`
+    # and when it all passes, merge the revision that was checked - not
+    # whatever is at the tip by the time this runs
+    curl -sS -X PUT "https://api.github.com/$repo/pulls/$n/merge" \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -d "$(jq -n --arg sha "$head" '{sha: $sha, merge_method: "merge"}')"
+
+The verdict line has to read `clean` and name the head sha, and the
+merge does not run until it does. The `verdict`
 tag is stamped on from the list each entry came out of, because it is
 nowhere in the entry itself; entries with no `Reviewed commit` line are
 dropped so a stray bot comment cannot win the sort.
+
+Passing the check is not the same as still passing it a moment later, so
+the merge names the revision it was given: `sha` is a precondition, and
+GitHub refuses with 409 if the head has moved since. Ordering the reads
+carefully makes a push *during* the check fail safe; only the
+precondition covers a push *after* it. Without it every gate here is
+advisory — they all describe a revision, and the merge would take
+whatever is at the tip.
 
 Both lookups are read the same way and for the same reason: 30 reactions
 per page by default, 100 comments or reviews per page at most, and taking
