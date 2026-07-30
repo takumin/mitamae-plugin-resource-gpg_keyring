@@ -43,6 +43,11 @@ test gems nor mitamae:
   port in sync if it ever changes.
 - Single spec file: `bundle exec rspec spec/integration/export_minimal_spec.rb`
   (narrow further with `-e '<example name>'`)
+- `LEGACY_GPG=/usr/bin/gpg1 bundle exec rake test` runs the same suite
+  against an old GnuPG (the resource supports 1.4.3 and up). Only
+  mitamae gets the legacy binary, via a shim directory prepended to its
+  PATH; the spec helpers keep inspecting results with the modern `gpg`
+  from PATH. The ed25519 example is skipped there.
 - `bundle exec rake clean` removes downloaded binaries and generated
   files (`git clean -xdf`).
 
@@ -60,8 +65,10 @@ test gems nor mitamae:
   ...) — the suite only reads keys, it never generates them, and no
   example touches a real key or a real server. Regenerate fixtures with
   `bundle exec rake fixtures:regenerate` (all, or a subset via task
-  args; see `rakelib/fixtures.rake`); keys are ed25519 with expiry
-  `never` so committed fixtures cannot rot — keep it that way.
+  args; see `rakelib/fixtures.rake`); keys are RSA with expiry `never`,
+  so committed fixtures cannot rot and stay readable by GnuPG 1.4, which
+  has no ECC support — `ed25519.asc` is the deliberate exception
+  covering the modern algorithm. Keep both properties that way.
   Regenerating changes the fingerprints, which are written literally in
   `test/recipe/` and `spec/`, so update them together (the task prints
   the new values).
