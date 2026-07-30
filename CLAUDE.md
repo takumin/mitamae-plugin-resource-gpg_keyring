@@ -72,3 +72,204 @@ test gems nor mitamae:
   Regenerating changes the fingerprints, which are written literally in
   `test/recipe/` and `spec/`, so update them together (the task prints
   the new values).
+
+## Pull request review loop
+
+Codex reviews pull requests here automatically. It starts when a draft is
+marked ready for review, or on an `@codex review` comment, and says where
+it is with reactions on the PR itself, left by
+`chatgpt-codex-connector[bot]`:
+
+- 👀 — review running. Nothing to do but wait; the bot takes it back
+  when the review ends.
+- 👍 — review finished and found nothing.
+- Findings arrive as review comments instead, with no reaction left
+  behind.
+
+After pushing a fix for a review comment, do all three, in this order:
+reply on the thread explaining the fix, mark that thread resolved, then
+post a separate `@codex review` comment asking for a re-review. Do not
+use `@codex review` to trigger the *first* review — marking a draft ready
+does that, and when a PR stops being a draft is the owner's call, never
+Claude's.
+
+A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR —
+of the revision it was left for. Two things can make a 👍 the wrong
+signal, and both have to be checked:
+
+- **Who left it.** A 👍 from anyone else is not it.
+- **Which commit it was left for.** The 👍 sits on the PR, not on a
+  commit, and nothing takes it back when the branch moves on. After a
+  push the old 👍 is still there to be found, and merging on it merges a
+  revision Codex never read. Every Codex verdict names the revision it
+  read as `Reviewed commit: <sha>`; require that to be the current head.
+- **What that verdict actually said.** A 👍 left by an earlier clean
+  review survives a later review that found problems, so "a 👍 exists"
+  and "the newest verdict names this head" can both be true while that
+  newest verdict is a list of findings. Require it to be the clean kind.
+  Which kind it is never appears in the text — a clean pass arrives as an
+  issue comment and findings as a review — so it has to be carried from
+  the list the entry came out of.
+
+So a fix pushed for review feedback always has to earn a new 👍 through
+`@codex review` — which is why that step is not optional. Merge with a
+merge commit, matching the existing history, and bind the merge to the
+revision that was checked rather than to whatever the tip is by then.
+
+Reactions never arrive over webhooks the way comments and checks do, so a
+👍 is only seen by looking for it. Polling the PR is not enough either:
+neither the PR payload nor `issue_read` says who reacted, only how many
+did. All of it comes from the REST API — this repository is public, so it
+needs no token — and every one of these lists pages, so walk them:
+
+    repo=repos/takumin/mitamae-plugin-resource-gpg_keyring
+    n=<number>
+
+    paged() {  # paged <path> [extra-query] -> one JSON object per line
+      p=1
+      while :; do
+        out=$(curl -sS "https://api.github.com/$1?per_page=100&page=$p&$2")
+        # An error is a JSON object, not an array, and `jq length` counts
+        # its keys - so testing only for emptiness spins forever, at full
+        # speed, against an API that is already refusing.
+        if [ "$(jq -r type <<<"$out")" != array ]; then
+          echo "github api: $(jq -r '.message // .' <<<"$out")" >&2
+          return 1
+        fi
+        [ "$(jq length <<<"$out")" -eq 0 ] && break
+        jq -c '.[]' <<<"$out"
+        p=$((p + 1))
+      done
+    }
+
+    # Every lookup is captured whole before anything reads it, so a list
+    # that failed halfway stops the check. `paged ... | jq ...` cannot do
+    # that: a pipeline reports the status of its *last* command, so
+    # paged's `return 1` is discarded and jq's happy exit stands in for
+    # it - leaving a truncated list that reads like a complete one.
+    plus1=$(paged "$repo/issues/$n/reactions" "content=%2B1") || exit 1
+    comments=$(paged "$repo/issues/$n/comments")              || exit 1
+    reviews=$(paged "$repo/pulls/$n/reviews")                 || exit 1
+    # Read the head *after* the lists, never before. A push that lands
+    # while they are being walked then leaves the head newer than anything
+    # the verdicts can name, so the check reads "not approved". Read it
+    # first and that same push reads as approved - for the revision it
+    # just replaced.
+    head=$(curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r '.head.sha // empty')
+    [ -n "$head" ] || { echo "github api: no head sha" >&2; exit 1; }
+
+    # is there a 👍 from the bot?
+    plus=$(jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at' <<<"$plus1")
+
+    # what was the newest verdict, on which revision?
+    newest=$( { jq -c '. + {verdict:"clean"}'    <<<"$comments"
+                jq -c '. + {verdict:"findings"}' <<<"$reviews"; } |
+      jq -r 'select(.user.login=="chatgpt-codex-connector[bot]")
+           | (.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) as $s
+           | select($s != null)
+           | [(.submitted_at // .created_at), .verdict, $s] | @tsv' | sort | tail -1)
+    IFS=$'\t' read -r _ kind sha <<<"$newest"
+
+    # Every check above only *prints* until something branches on it. Each
+    # of these is one of the three gates, and each exits rather than
+    # falling through to the merge.
+    [ -n "$plus" ]      || { echo "no: no 👍 from the bot"           >&2; exit 1; }
+    [ -n "$sha" ]       || { echo "no: no verdict names a revision"  >&2; exit 1; }
+    [ "$kind" = clean ] || { echo "no: newest verdict is $kind"      >&2; exit 1; }
+
+    # The verdict names an abbreviated revision. Resolve it and require it
+    # to *be* the head: asking whether the head merely starts with those
+    # characters is a weaker question, and a different commit can answer
+    # it. GitHub 422s on an abbreviation it cannot resolve, which `// empty`
+    # turns into a mismatch rather than a pass.
+    reviewed=$(curl -sS "https://api.github.com/$repo/commits/$sha" | jq -r '.sha // empty')
+    [ "$reviewed" = "$head" ] ||
+      { echo "no: verdict names ${reviewed:-$sha}, head is $head" >&2; exit 1; }
+
+    # only now, and only for the revision that was checked. --fail-with-body
+    # because curl exits 0 on a 409/403 otherwise, and "nothing merged"
+    # would read as success.
+    curl -sS --fail-with-body -X PUT "https://api.github.com/$repo/pulls/$n/merge" \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -d "$(jq -n --arg sha "$head" '{sha: $sha, merge_method: "merge"}')" ||
+      { echo "merge refused" >&2; exit 1; }
+
+The verdict line has to read `clean` and name the head sha, and the
+merge does not run until it does — which is what those four `exit`s are
+for. A lookup that only prints decides nothing; read as a script, an
+absent 👍 or a findings verdict would scroll past and the merge would go
+ahead anyway. The `sha` precondition does not cover this: it asks
+whether the head moved, never whether it was approved.
+
+`[ -n "$sha" ]` is there because an empty `$sha` would otherwise be sent
+to the commits endpoint as a bare path, whose answer is not a commit and
+not a refusal to resolve one. Nothing reaches it today: the jq filter
+drops entries with no `Reviewed commit`, and a verdict that is missing
+entirely fails the `clean` test first. It costs one line and covers the
+case where those stop being true.
+
+The abbreviation is why the revision gate resolves rather than compares
+prefixes. Codex writes 10 hex characters — 40 bits, which is not a wall —
+and "the head starts with these characters" is a different, weaker
+question than "this is the head". Resolving turns it back into the
+question worth asking, for one request. GitHub needs at least 7
+characters and answers 422 for anything it cannot resolve, so a garbage
+or truncated sha fails the gate instead of skipping it.
+
+The `verdict`
+tag is stamped on from the list each entry came out of, because it is
+nowhere in the entry itself; entries with no `Reviewed commit` line are
+dropped so a stray bot comment cannot win the sort.
+
+Passing the check is not the same as still passing it a moment later, so
+the merge names the revision it was given: `sha` is a precondition, and
+GitHub refuses with 409 if the head has moved since. Ordering the reads
+carefully makes a push *during* the check fail safe; only the
+precondition covers a push *after* it. Without it every gate here is
+advisory — they all describe a revision, and the merge would take
+whatever is at the tip.
+
+Both lookups are read the same way and for the same reason: 30 reactions
+per page by default, 100 comments or reviews per page at most, and taking
+only the first page of either loses the newest entry on a long-running
+PR. The reaction lookup then reads as no 👍, and the revision lookup
+names a stale sha — both of which stall the loop rather than break it,
+which is the failure that never announces itself. `content=%2B1` asks for
+👍 alone; drop it to see every reaction. `%2B` rather than `+`, which
+would decode as a space.
+
+That split — `Reviewed commit` in an issue comment when the review is
+clean, in the review body when it has findings — is why both lists are
+read, and it is also the only thing that says which kind of verdict an
+entry is. The sha it carries is abbreviated, so resolve it through the
+commits endpoint and require the full result to equal the head — never
+compare it as a prefix of the head.
+
+Do not reach for timestamps here. Comparing the 👍 against the head
+commit's `committer.date` looks equivalent and is not: that date is when
+the commit was written, not when the branch received it. Write a commit
+locally, let Codex review and 👍 the older head, then push what was
+already sitting there, and the stale 👍 is newer than the new head's
+date — the check passes and the merge is of unreviewed code. Codex's own
+`Reviewed commit` has no such gap: it names a revision rather than a
+moment.
+
+`pulls/<number>/reviews` alone would be tidier, since its entries carry a
+`commit_id` field, but a clean verdict never creates a review object —
+which is exactly the case that ends in a merge.
+
+A failed lookup is not the same answer as an empty one: treat it as "not
+known", never as "no approval". That distinction only survives if the
+failure is allowed to reach you, which is why the lookups above are run
+as a script — `bash -c` or a file, not pasted line by line into a live
+shell, where `exit 1` would close the shell rather than abandon the
+check, and where a `||` that never fires is easy not to notice.
+Unauthenticated polling gets 60 requests
+an hour, and a round over both PRs costs roughly ten, so this is a real
+ceiling rather than a theoretical one — pass `-H "Authorization: Bearer
+$GITHUB_TOKEN"` when a token is around and the limit is 5000 instead.
+
+Where `gh` is installed, `gh api --paginate` walks these lists for you,
+authenticates, and fails on an error response, which is worth using
+interactively. The shell above is what the doc records because a fresh
+container has `curl` and `jq` and not `gh`.
