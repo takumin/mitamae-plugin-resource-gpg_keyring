@@ -130,10 +130,15 @@ module ::MItamae
                 end
               end
 
+              # export-minimal drops third-party signatures, so the placed
+              # file stays deterministic no matter what the source attached
+              # to the key (keyservers since GnuPG 2.2.17 already strip them
+              # on receive, older ones do not). Revocation signatures are
+              # self-signatures and survive this.
               if File.extname(attributes.path).eql?('.gpg')
-                opts = ['--export', desired.fingerprint]
+                opts = ['--export-options', 'export-minimal', '--export', desired.fingerprint]
               else
-                opts = ['--export', '--armor', desired.fingerprint]
+                opts = ['--export-options', 'export-minimal', '--export', '--armor', desired.fingerprint]
               end
 
               result = run_command(gpg(homedir, opts), error: false)

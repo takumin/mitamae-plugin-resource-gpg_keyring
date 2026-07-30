@@ -98,6 +98,15 @@ FIXTURES = {
     key
   end,
 
+  # A key carrying a third-party signature next to its self-signature.
+  'third-party-signed.asc' => lambda do |gpg, path|
+    target = gpg.generate_key('Target Key <target@example.com>')
+    third_party = gpg.generate_key('Third Party <third@example.com>')
+    gpg.sign_key(third_party, target)
+    gpg.export(target, to: path)
+    target
+  end,
+
 }
 
 namespace :fixtures do
