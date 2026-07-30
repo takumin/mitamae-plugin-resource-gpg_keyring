@@ -121,7 +121,14 @@ needs no token — and every one of these lists pages, so walk them:
       p=1
       while :; do
         out=$(curl -sS "https://api.github.com/$1?per_page=100&page=$p&$2")
-        [ "$(jq 'length' <<<"$out")" -eq 0 ] && break
+        # An error is a JSON object, not an array, and `jq length` counts
+        # its keys - so testing only for emptiness spins forever, at full
+        # speed, against an API that is already refusing.
+        if [ "$(jq -r type <<<"$out")" != array ]; then
+          echo "github api: $(jq -r '.message // .' <<<"$out")" >&2
+          return 1
+        fi
+        [ "$(jq length <<<"$out")" -eq 0 ] && break
         jq -c '.[]' <<<"$out"
         p=$((p + 1))
       done
@@ -173,7 +180,13 @@ moment.
 `commit_id` field, but a clean verdict never creates a review object —
 which is exactly the case that ends in a merge.
 
-Where `gh` is installed, `gh api --paginate` walks these lists for you
-and `--jq` filters them, which is worth using interactively. The shell
-above is what the doc records because a fresh container has `curl` and
-`jq` and not `gh`.
+A failed lookup is not the same answer as an empty one: treat it as "not
+known", never as "no approval". Unauthenticated polling gets 60 requests
+an hour, and a round over both PRs costs roughly ten, so this is a real
+ceiling rather than a theoretical one — pass `-H "Authorization: Bearer
+$GITHUB_TOKEN"` when a token is around and the limit is 5000 instead.
+
+Where `gh` is installed, `gh api --paginate` walks these lists for you,
+authenticates, and fails on an error response, which is worth using
+interactively. The shell above is what the doc records because a fresh
+container has `curl` and `jq` and not `gh`.
