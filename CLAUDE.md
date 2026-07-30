@@ -43,8 +43,10 @@ artifact is a hard failure rather than a warning. `rake tool` installs
 them; `rake lint` depends on it.
 
 - Bumping a tool: change the version in `aqua.yaml`, run
-  `bundle exec rake checksum`, commit both files. The hashes cannot be
-  derived from the version, so the two always move together.
+  `bundle exec rake checksum`, commit both files. Renovate raises the
+  version but cannot compute the hashes, so on a bot PR the
+  `autofix.ci` workflow runs that same task and pushes the result; the
+  manual command is only for local bumps.
 - aqua itself is bootstrapped outside the task runner (a tool manager
   cannot install itself); CI uses the `aquaproj/aqua-installer` action
   with `enable_aqua_install: 'false'` so that installing the *tools* stays
@@ -111,6 +113,14 @@ not in a `run:` block.
 - Permissions start at `{}` and are granted per job, actions are pinned
   to full commit SHAs with a version comment, checkouts do not persist
   credentials, and every job has a timeout.
+- `.github/workflows/autofix.yml` regenerates what a bot cannot: it runs
+  `rake checksum` on every pull request and hands the diff to the
+  autofix.ci app, which pushes the fix. Two things about it are load
+  bearing. Its `name:` must be exactly `autofix.ci` or the action
+  refuses to run, and the job stays `contents: read` — the app owns the
+  write side, which is also why its commit re-triggers CI where a
+  `GITHUB_TOKEN` push would not. The app has to be installed on the
+  repository, like Renovate.
 - Renovate (`renovate.json`) keeps the pins fresh — action SHAs, gems and
   the `aqua.yaml` tool versions, the last of which is why it is Renovate
   and not Dependabot: Dependabot has no aqua ecosystem. It extends
