@@ -86,9 +86,19 @@ use `@codex review` to trigger the *first* review — marking a draft ready
 does that, and when a PR stops being a draft is the owner's call, never
 Claude's.
 
-A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR.
-Who left it is the whole signal — a 👍 from anyone else is not it. Merge
-with a merge commit, matching the existing history.
+A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR,
+provided it is newer than the commit it approves. Two things can make a
+👍 the wrong signal, and both have to be checked:
+
+- **Who left it.** A 👍 from anyone else is not it.
+- **When.** The 👍 sits on the PR, not on a commit, and nothing takes it
+  back when the branch moves on. After a push, the old 👍 is still there
+  to be found, and merging on it merges a revision Codex never read.
+  Compare its timestamp against the head commit's before believing it.
+
+So a fix pushed for review feedback always has to earn a new 👍 through
+`@codex review` — which is why that step is not optional. Merge with a
+merge commit, matching the existing history.
 
 Reactions never arrive over webhooks the way comments and checks do, so a
 👍 is only seen by looking for it. Polling the PR is not enough either:
@@ -102,3 +112,15 @@ The query string is not decoration. That endpoint returns 30 reactions
 per page by default, so on a busy PR a 👍 can sit past the first page and
 read as no 👍 at all — which fails in the direction of waiting forever.
 Drop the `content` filter to see every reaction instead of only 👍.
+
+The timestamp to compare a 👍 against is the head commit's:
+
+    repo=repos/takumin/mitamae-plugin-resource-gpg_keyring
+    sha=$(curl -sS "https://api.github.com/$repo/pulls/<number>" | jq -r .head.sha)
+    curl -sS "https://api.github.com/$repo/commits/$sha" | jq -r .commit.committer.date
+
+`pulls/<number>/reviews` looks like the better source, since its entries
+carry a `commit_id`, but a clean verdict never creates one: Codex opens a
+review only when it has findings and answers a clean pass with the 👍 and
+a plain comment. The timestamps are what distinguish a fresh 👍 from a
+stale one.
