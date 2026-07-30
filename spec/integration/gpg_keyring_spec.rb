@@ -1,5 +1,5 @@
 RSpec.describe 'gpg_keyring' do
-  VALID_KEY_FINGERPRINT = '789ACEE7FE33FEACDF042B8BC0A90B87712D6C7F'.freeze
+  VALID_KEY_FINGERPRINT = 'EB7799FC07E9E5BEF41905894072ADEA8961DFD8'.freeze
 
   describe 'existing keyring' do
     {
@@ -49,6 +49,40 @@ RSpec.describe 'gpg_keyring' do
       keyring = temporary('url-download.gpg')
       expect(armored?(keyring)).to be(false)
       expect(fingerprint_of(keyring)).to eq(VALID_KEY_FINGERPRINT)
+    end
+  end
+
+  describe 'ed25519 key' do
+    it 'places an ECC key through the whole fetch pipeline' do
+      skip 'GnuPG 1.4 has no ECC support' if legacy_gpg?
+
+      run = run_mitamae('ed25519_key')
+      expect_mitamae_success(run)
+
+      keyring = temporary('ed25519.gpg')
+      expect(armored?(keyring)).to be(false)
+      expect(fingerprint_of(keyring)).to eq('177ACBBF0F0DF7E60E58ACD618DE04FD1CEFC6E4')
+    end
+
+    # gpg answers an ECC key it cannot parse with "no valid user IDs",
+    # which is about the one thing that is not wrong with the key.
+    it 'names the algorithm when the gpg in use cannot handle it' do
+      skip 'the gpg under test supports ECC' unless legacy_gpg?
+
+      run = run_mitamae('ed25519_key')
+      expect_mitamae_failure(run, /public key algorithm 22 \(EdDSA\), which the gpg in use does not support/)
+      expect(File.exist?(temporary('ed25519.gpg'))).to be(false)
+    end
+
+    it 'names the algorithm for an already-placed ECC keyring' do
+      skip 'the gpg under test supports ECC' unless legacy_gpg?
+
+      keyring = temporary('existing-ed25519.gpg')
+      FileUtils.cp(fixture('ed25519.asc'), keyring)
+
+      run = run_mitamae('existing_ed25519')
+      expect_mitamae_failure(run, /public key algorithm 22 \(EdDSA\), which the gpg in use does not support/)
+      expect(File.binread(keyring)).to eq(File.binread(fixture('ed25519.asc')))
     end
   end
 

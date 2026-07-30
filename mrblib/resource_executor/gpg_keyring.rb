@@ -12,10 +12,50 @@ module ::MItamae
         # portable equivalent.
         IMPORT_OPTIONS = ['--import-options', 'import-minimal'].freeze
 
-        # --receive-keys takes its import options from --keyserver-options,
+        # --recv-keys takes its import options from --keyserver-options,
         # not from --import-options (see gpg(1) on keyserver-options:
         # "Valid import-options or export-options may be used here as well").
         KEYSERVER_IMPORT_OPTIONS = ['--keyserver-options', 'import-minimal'].freeze
+
+        # Options for every key listing, shaped by what GnuPG versions
+        # older than 2.1.15 need. Both are no-ops on newer ones, so the
+        # listing is identical everywhere and only has to be parsed once.
+        #
+        # --fixed-list-mode keeps the primary uid in a uid record of its
+        # own. Without it GnuPG 1.4 inlines that uid into the pub record
+        # and emits no uid record for it at all, which reads here as a key
+        # with no valid uid and breaks the user_id assertion. GnuPG 2.x is
+        # always in fixed list mode; the option exists since 1.0.5.
+        #
+        # --fingerprint repeated adds the fpr records for sub keys. From
+        # 2.1.15 on they are unconditional ("gpg: Always print fingerprint
+        # records in --with-colons mode"); before that they are printed
+        # only when the option is given twice, leaving the sub key check
+        # with nothing to match.
+        LIST_OPTIONS = ['--fixed-list-mode', '--fingerprint', '--fingerprint'].freeze
+
+        # Oldest GnuPG this resource works with: import-minimal and
+        # export-minimal, which every fetch depends on, arrived in 1.4.3.
+        # Listings are already normalized across the whole range by
+        # LIST_OPTIONS, so this is the only version that has to be named.
+        MINIMUM_GPG_VERSION = '1.4.3'.freeze
+
+        # Public key algorithms that need ECC support in gpg (RFC 6637
+        # and RFC 8032 assignments). GnuPG carries none of them before
+        # 2.1, which is what makes them worth naming: 1.4 rejects such a
+        # key with "no valid user IDs", because it cannot check a
+        # self-signature it has no algorithm for, and that message sends
+        # everyone looking at the uids instead of the algorithm.
+        ECC_PUBKEY_ALGORITHMS = {
+          18 => 'ECDH',
+          19 => 'ECDSA',
+          22 => 'EdDSA',
+        }.freeze
+
+        # Algorithm names as `gpg --version` lists them. The names are
+        # printed verbatim while the labels around them are translated,
+        # so the whole output is searched rather than a "Pubkey:" line.
+        ECC_ALGORITHM_NAMES = %w[ECDH ECDSA EDDSA].freeze
 
         # Public keyservers fail intermittently, so network fetches are
         # retried with exponential backoff before the run gives up.
@@ -41,6 +81,113 @@ module ::MItamae
             attempt += 1
             interval *= 2
           end
+        end
+
+        # Compares dotted version strings numerically, so that 1.4.23 is
+        # newer than 1.4.3 (a plain string compare gets that wrong).
+        def version_at_least?(actual, minimum)
+          actual_parts = actual.split('.').map {|part| part.to_i }
+          minimum_parts = minimum.split('.').map {|part| part.to_i }
+          minimum_parts.length.times do |i|
+            current = actual_parts[i] ? actual_parts[i] : 0
+            required = minimum_parts[i]
+            return true if current > required
+            return false if current < required
+          end
+          true
+        end
+
+        # Checked up front so an ancient gpg is named as such, instead of
+        # failing later as an unknown-option error from inside a fetch.
+        def verify_gpg_version
+          result = run_command(['gpg', '--version'], error: false)
+          # Anchored to GnuPG's own banner ("gpg (GnuPG) 2.4.4", or
+          # "gpg (GnuPG/MacGPG2) 2.2.41" once repackaged) rather than to
+          # the first number on the first line: a wrapper that announces
+          # itself first would otherwise have its own version read as
+          # gpg's and get a perfectly good binary refused.
+          match = result.exit_status == 0 ? /\(GnuPG[^)]*\)\s+(\d+\.\d+(\.\d+)?)/.match(result.stdout) : nil
+
+          if match.nil?
+            # A build that prints no recognizable banner is left alone.
+            # Refusing to run on a version that cannot be read would be
+            # worse than letting the actual gpg invocations speak for
+            # themselves.
+            MItamae.logger.debug 'could not read the gpg version, skipping the minimum version check'
+            return
+          end
+
+          version = match[1]
+
+          MItamae.logger.debug "gpg version: #{version}"
+          return if version_at_least?(version, MINIMUM_GPG_VERSION)
+
+          raise "`gpg` is #{version}, but mitamae's gpg_keyring needs GnuPG #{MINIMUM_GPG_VERSION} or newer (--import-options import-minimal)."
+        end
+
+        # Whether the gpg in use carries ECC at all. Read from its own
+        # algorithm list, so a build without ECC support is recognized
+        # even on a version new enough to have it.
+        def gpg_supports_ecc?
+          if @gpg_supports_ecc.nil?
+            result = run_command(['gpg', '--version'], error: false)
+            # Unreadable output must not turn into a claim about the
+            # binary, so assume support and stay quiet.
+            @gpg_supports_ecc = result.exit_status != 0 ||
+                                ECC_ALGORITHM_NAMES.any? {|name| result.stdout.include?(name) }
+          end
+          @gpg_supports_ecc
+        end
+
+        # Reads the primary key's algorithm out of gpg's packet dump.
+        # Parsing output is usually a trap, but these dump lines are
+        # written with a plain fprintf in gpg (no translation), so the
+        # number can be read whatever the locale is. Returns nil unless
+        # the key turns out to be one this gpg cannot handle.
+        def unsupported_algorithm(path)
+          return nil if gpg_supports_ecc?
+
+          result = run_command(['gpg', '--list-packets', path], error: false)
+          return nil if result.exit_status != 0
+
+          line = result.stdout.lines.detect {|l| l.include?(':public key packet:') }
+          # The algorithm sits on the line after the packet header.
+          index = line ? result.stdout.lines.index(line) : nil
+          match = index ? /algo (\d+)/.match(result.stdout.lines[index + 1].to_s) : nil
+          return nil if match.nil?
+
+          name = ECC_PUBKEY_ALGORITHMS[match[1].to_i]
+          name ? "public key algorithm #{match[1]} (#{name})" : nil
+        end
+
+        # The receive path never gets a file of its own to inspect - the
+        # key fails inside gpg - so the gap can only be pointed at, not
+        # proven. Worth saying anyway: on a binary without ECC support it
+        # is the likeliest reason a receive fails.
+        def missing_ecc_note
+          return '' if gpg_supports_ecc?
+
+          ' (note: the gpg in use has no ECC support, so an ECC key cannot be received by it)'
+        end
+
+        # mitamae rescues Backend::CommandExecutionError and logs only
+        # "<resource> Failed.", dropping the message with it, so a
+        # failure that has something to explain is raised as a plain
+        # error - which mitamae does print - while the ones with nothing
+        # to add keep the original type.
+        def raise_command_failure(subject, note)
+          raise "#{subject}#{note}" unless note.empty?
+
+          raise MItamae::Backend::CommandExecutionError, subject
+        end
+
+        # Appended to an import failure so the cause is named instead of
+        # left to gpg's misleading uid complaint.
+        def unsupported_algorithm_note(path)
+          algorithm = unsupported_algorithm(path)
+          return '' if algorithm.nil?
+
+          ": the key uses #{algorithm}, which the gpg in use does not support (GnuPG 2.1 or newer is required for ECC keys)"
         end
 
         def gpg(homedir, args)
@@ -137,6 +284,8 @@ module ::MItamae
             raise "`curl` command is not available. Please install curl to use mitamae's gpg_keyring."
           end
 
+          verify_gpg_version
+
           super
         end
 
@@ -170,10 +319,10 @@ module ::MItamae
           Dir.mktmpdir{|homedir|
             result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', attributes.path]), error: false)
             if result.exit_status != 0
-              raise MItamae::Backend::CommandExecutionError, "gpg import key: #{attributes.path}"
+              raise_command_failure("gpg import key: #{attributes.path}", unsupported_algorithm_note(attributes.path))
             end
 
-            result = run_command(gpg(homedir, ['--fingerprint']), error: false)
+            result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
             if result.exit_status != 0
               raise MItamae::Backend::CommandExecutionError, "gpg show fingerprint"
             end
@@ -244,7 +393,7 @@ module ::MItamae
 
                 result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', "/tmp/#{desired.fingerprint}"]), error: false)
                 if result.exit_status != 0
-                  raise MItamae::Backend::CommandExecutionError, "gpg import key: fingerprint: #{desired.fingerprint}"
+                  raise_command_failure("gpg import key: fingerprint: #{desired.fingerprint}", unsupported_algorithm_note("/tmp/#{desired.fingerprint}"))
                 end
               else
                 MItamae.logger.debug "gpg download keyserver: #{desired.keyserver}"
@@ -253,15 +402,17 @@ module ::MItamae
                   f.write("keyserver #{desired.keyserver}")
                 end
 
+                # --recv-keys, not its --receive-keys alias: GnuPG 1.4
+                # only knows the short spelling, 2.x knows both.
                 result = with_retry("gpg receive key: keyserver: #{desired.keyserver}") {
-                  run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--receive-keys', desired.fingerprint]), error: false)
+                  run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--recv-keys', desired.fingerprint]), error: false)
                 }
                 if result.exit_status != 0
-                  raise MItamae::Backend::CommandExecutionError, "gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}"
+                  raise_command_failure("gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}", missing_ecc_note)
                 end
               end
 
-              result = run_command(gpg(homedir, ['--fingerprint']), error: false)
+              result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
               if result.exit_status != 0
                 raise MItamae::Backend::CommandExecutionError, 'gpg list fetched keys'
               end

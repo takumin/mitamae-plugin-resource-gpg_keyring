@@ -84,6 +84,68 @@ module GpgKeyringSpecHelper
     File.symlink('..', File.join(plugins_dir, File.basename(ROOT_DIR)))
   end
 
+  # --- legacy GnuPG -------------------------------------------------------
+
+  # LEGACY_GPG=/usr/bin/gpg1 runs the whole suite against an old GnuPG.
+  # The resource always calls plain `gpg`, so the binary is swapped by
+  # putting a shim directory in front of mitamae's PATH; the inspection
+  # helpers below keep calling the modern gpg from this process' own PATH,
+  # which is what makes examples verifiable at all (GnuPG 1.4 has no
+  # --show-keys). The committed fixtures are RSA so that a legacy run has
+  # keys it can read - only the ed25519 example opts out.
+  def legacy_gpg?
+    !ENV['LEGACY_GPG'].nil?
+  end
+
+  def legacy_shim_dir
+    @legacy_shim_dir ||= begin
+      dir = File.join(BIN_DIR, 'legacy-shim')
+      FileUtils.mkdir_p(dir)
+      shim = File.join(dir, 'gpg')
+      FileUtils.rm_f(shim)
+      FileUtils.ln_s(File.expand_path(ENV.fetch('LEGACY_GPG')), shim)
+      dir
+    end
+  end
+
+  # The gpg under test, before any shim is put in front of it.
+  def real_gpg
+    ENV['LEGACY_GPG'] || which('gpg')
+  end
+
+  # Puts a throwaway `gpg` in front of mitamae for the duration of the
+  # block, answering --version with the given shell snippet and handing
+  # every other call to the real binary. Banners no real gpg prints are
+  # the only way to drive the version check from a spec.
+  def with_gpg_stub(version_branch)
+    dir = File.join(BIN_DIR, 'gpg-stub')
+    FileUtils.mkdir_p(dir)
+    stub = File.join(dir, 'gpg')
+    File.write(stub, <<~SCRIPT)
+      #!/bin/sh
+      if [ "$1" = "--version" ]; then
+        #{version_branch}
+        exit 0
+      fi
+      exec #{real_gpg} "$@"
+    SCRIPT
+    FileUtils.chmod(0o755, stub)
+    @gpg_stub_dir = dir
+    yield
+  ensure
+    @gpg_stub_dir = nil
+    FileUtils.rm_rf(dir)
+  end
+
+  def mitamae_env
+    dirs = []
+    dirs << @gpg_stub_dir if @gpg_stub_dir
+    dirs << legacy_shim_dir if legacy_gpg?
+    return {} if dirs.empty?
+
+    { 'PATH' => (dirs + [ENV.fetch('PATH', '')]).join(File::PATH_SEPARATOR) }
+  end
+
   # --- running mitamae ----------------------------------------------------
 
   def recipe_path(name)
@@ -92,7 +154,7 @@ module GpgKeyringSpecHelper
 
   def run_mitamae(recipe_name)
     log, status = Open3.capture2e(
-      mitamae_bin, 'local', '--log-level=debug', '--plugins=.plugins',
+      mitamae_env, mitamae_bin, 'local', '--log-level=debug', '--plugins=.plugins',
       recipe_path(recipe_name), chdir: ROOT_DIR
     )
     MitamaeRun.new(log, status)
@@ -155,6 +217,9 @@ RSpec.configure do |config|
   config.before(:suite) do
     GpgKeyringSpecHelper.ensure_plugins
     GpgKeyringSpecHelper.mitamae_bin
+    if GpgKeyringSpecHelper.legacy_gpg?
+      warn "gpg under test: #{`#{ENV.fetch('LEGACY_GPG')} --version`.lines.first}"
+    end
     $local_key_server = LocalKeyServer.new(
       GpgKeyringSpecHelper::LOCAL_SERVER_HOST,
       GpgKeyringSpecHelper::LOCAL_SERVER_PORT,

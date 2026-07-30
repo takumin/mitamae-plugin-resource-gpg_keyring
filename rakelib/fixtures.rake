@@ -6,8 +6,12 @@ require 'tmpdir'
 # test/fixture/. The suite itself never generates keys - it only reads
 # the committed files - so this task runs rarely, by hand.
 #
-# Keys are ed25519 with expiry 'never' on purpose: committed fixtures
-# must not rot with time. Keep it that way.
+# Keys are RSA with expiry 'never' on purpose. 'never' keeps committed
+# fixtures from rotting with time; RSA keeps them readable by GnuPG 1.4,
+# which has no ECC support at all, so the whole suite can be run against
+# the oldest GnuPG the resource supports (see LEGACY_GPG in
+# spec/spec_helper.rb). ed25519.asc is the deliberate exception that
+# covers the modern algorithm. Keep both properties that way.
 #
 # Regenerating changes the fingerprints, which are written literally
 # into test/recipe/ and spec/, so update those together (the task
@@ -35,8 +39,8 @@ class GpgFixture
     @homedir = homedir
   end
 
-  def generate_key(uid)
-    gpg('--quick-generate-key', uid, 'ed25519', 'cert', 'never')
+  def generate_key(uid, algo = 'rsa2048')
+    gpg('--quick-generate-key', uid, algo, 'cert', 'never')
     fingerprint_of(uid)
   end
 
@@ -48,7 +52,7 @@ class GpgFixture
     gpg('--yes', '--quick-revoke-uid', fingerprint, uid)
   end
 
-  def add_key(fingerprint, algo = 'cv25519', usage = 'encr')
+  def add_key(fingerprint, algo = 'rsa2048', usage = 'encr')
     gpg('--quick-add-key', fingerprint, algo, usage, 'never')
   end
 
@@ -146,6 +150,16 @@ FIXTURES = {
   # colon-format listings.
   'colon-uid.asc' => lambda do |gpg, path|
     key = gpg.generate_key('Colon: User <colon@example.com>')
+    gpg.export(key, to: path)
+    key
+  end,
+
+  # The one non-RSA fixture: modern GnuPG places ECC keys as readily as
+  # RSA ones, and this is what proves it. GnuPG 1.4 cannot read it, so
+  # the example using it is skipped on a legacy run.
+  'ed25519.asc' => lambda do |gpg, path|
+    key = gpg.generate_key('Ed25519 Key <ed25519@example.com>', 'ed25519')
+    gpg.add_key(key, 'cv25519')
     gpg.export(key, to: path)
     key
   end,

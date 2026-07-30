@@ -22,7 +22,7 @@ RSpec.describe 'multiple pub keys' do
     expect(gpg_show_keys(keyring).lines.grep(/^sub:/).size).to eq(1)
 
     run = run_mitamae('sub_key_fingerprint')
-    expect_mitamae_failure(run, /is a sub key of 46EACE42ED8B71D8EBD2939486BA84F24F9235F0/)
+    expect_mitamae_failure(run, /is a sub key of 035509979A0F48F0465D49501E48852083BDBE9B/)
     expect(File.binread(keyring)).to eq(File.binread(fixture('with-subkey.asc')))
   end
 
