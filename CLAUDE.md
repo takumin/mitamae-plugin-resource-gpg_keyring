@@ -96,6 +96,13 @@ signal, and both have to be checked:
   push the old 👍 is still there to be found, and merging on it merges a
   revision Codex never read. Every Codex verdict names the revision it
   read as `Reviewed commit: <sha>`; require that to be the current head.
+- **What that verdict actually said.** A 👍 left by an earlier clean
+  review survives a later review that found problems, so "a 👍 exists"
+  and "the newest verdict names this head" can both be true while that
+  newest verdict is a list of findings. Require it to be the clean kind.
+  Which kind it is never appears in the text — a clean pass arrives as an
+  issue comment and findings as a review — so it has to be carried from
+  the list the entry came out of.
 
 So a fix pushed for review feedback always has to earn a new 👍 through
 `@codex review` — which is why that step is not optional. Merge with a
@@ -124,13 +131,19 @@ needs no token — and every one of these lists pages, so walk them:
     paged "$repo/issues/$n/reactions" "content=%2B1" |
       jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at'
 
-    # which revision did it last review?
+    # what was the newest verdict, on which revision?
     curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r .head.sha
-    { paged "$repo/issues/$n/comments"; paged "$repo/pulls/$n/reviews"; } |
+    { paged "$repo/issues/$n/comments" | jq -c '. + {verdict:"clean"}'
+      paged "$repo/pulls/$n/reviews"   | jq -c '. + {verdict:"findings"}'; } |
       jq -r 'select(.user.login=="chatgpt-codex-connector[bot]")
-           | [(.submitted_at // .created_at),
-              ((.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) // empty)]
-           | @tsv' | sort | tail -1
+           | (.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) as $s
+           | select($s != null)
+           | [(.submitted_at // .created_at), .verdict, $s] | @tsv' | sort | tail -1
+
+That last line has to read `clean` and name the head sha. The `verdict`
+tag is stamped on from the list each entry came out of, because it is
+nowhere in the entry itself; entries with no `Reviewed commit` line are
+dropped so a stray bot comment cannot win the sort.
 
 Both lookups are read the same way and for the same reason: 30 reactions
 per page by default, 100 comments or reviews per page at most, and taking
@@ -141,10 +154,11 @@ which is the failure that never announces itself. `content=%2B1` asks for
 👍 alone; drop it to see every reaction. `%2B` rather than `+`, which
 would decode as a space.
 
-Codex writes `Reviewed commit` into an issue comment when the review is
-clean and into the review body when it has findings, so both lists are
-read and the newest entry across them wins. The sha is abbreviated, so
-compare it as a prefix of the head sha.
+That split — `Reviewed commit` in an issue comment when the review is
+clean, in the review body when it has findings — is why both lists are
+read, and it is also the only thing that says which kind of verdict an
+entry is. The sha is abbreviated, so compare it as a prefix of the head
+sha.
 
 Do not reach for timestamps here. Comparing the 👍 against the head
 commit's `committer.date` looks equivalent and is not: that date is when
