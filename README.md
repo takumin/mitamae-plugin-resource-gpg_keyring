@@ -18,6 +18,16 @@ end
 received from `keyserver` (default: `hkps://keys.openpgp.org`). Attributes
 of the file resource (`owner`, `mode`, ...) work as usual.
 
+The key is handled in a throwaway GnuPG homedir unless `homedir` names one
+to keep:
+
+```ruby
+gpg_keyring '/etc/apt/keyrings/example.gpg' do
+  fingerprint 'F487F0CB3B38FC5CE3512CC4F18EC5EF947FFAD2'
+  homedir     '/var/lib/example/gnupg'
+end
+```
+
 ## Semantics worth knowing
 
 - `user_id` is an assertion, not a convergible attribute: when the key's
@@ -36,6 +46,40 @@ of the file resource (`owner`, `mode`, ...) work as usual.
 - One file, one key on writes: a file containing several keys is readable
   as long as the desired key is among them, but the resource refuses to
   rewrite a multi-key file that does not contain the desired key.
+- A `homedir` outlives the run and doubles as a key store: a key already
+  in it is exported without contacting `url` or `keyserver` at all, so a
+  pre-populated homedir works on hosts without network access. Nothing
+  refreshes such a key on its own - drop it from the homedir and run
+  again. The directory is created with mode 0700 when missing, an
+  existing one keeps its permissions, and the `delete` action only
+  removes the keyring file. A run that finds no such directory says so
+  with a warning before creating one: a homedir that is not there is as
+  easily a typo in the recipe as a first run.
+- Fetching never touches your homedir. Downloading, receiving and
+  importing all happen in a throwaway one, and what your homedir is
+  handed afterwards is the placed keyring itself: the same verified,
+  `export-minimal` key that went into the file, and nothing else. A run
+  that stops on the fingerprint or `user_id` assertion leaves it exactly
+  as it was: uncreated if it was not there, and otherwise untouched. gpg
+  initializes any homedir it is pointed at - it creates the store its
+  configuration names, builds a trustdb, and starts keyboxd where that is
+  the store - so the lookup deciding whether a fetch is needed is made
+  over a throwaway copy of your keys, and your homedir is pointed at only
+  once the key has been verified. Keys are found there whether they live
+  in `pubring.kbx`, 1.4's `pubring.gpg`, or keyboxd's `public-keys.d`.
+- Reading an already-placed keyring is a throwaway homedir too, so keys
+  you keep in yours never end up in the file. A `gpg.conf` in it is
+  ignored as well (`--no-options`): options like `armor` would otherwise
+  decide what gets written.
+- The keyring file is written after the homedir has been updated, so a
+  target *inside* the homedir lands on whatever gpg keeps under that
+  name. A path naming one of gpg's own files (`pubring.kbx`,
+  `pubring.gpg`, `trustdb.gpg`, any `*.conf`, the agent sockets, ...) or
+  anything inside one of its directories (`public-keys.d`,
+  `private-keys-v1.d`, ...) stops the run; any other path in there works
+  and is warned about once. Both paths are resolved before they are
+  compared, so a symlink cannot present one of those as something else.
+  Keep the keyring outside the homedir and the question does not arise.
 
 ## GnuPG versions
 

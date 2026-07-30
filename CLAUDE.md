@@ -172,6 +172,12 @@ not in a `run:` block.
   no environment variables. Committed fixtures live in `test/fixture/`
   and must never be modified by a run; writable output goes to
   `test/temporary/`, which is wiped before each example.
+- A recipe that names a `homedir` gets `test/temporary/gnupg`. The suite
+  populates and inspects it with plain gpg (`import_into_homedir`,
+  `homedir_fingerprints`), populating with the gpg under test so a legacy
+  run gets a keyring that binary can read. gpg leaves an agent and a
+  dirmngr holding the directory, so `wipe_temporary` kills them before
+  deleting it.
 - All fixtures are synthetic (revoked uids, multi-key files, subkeys,
   ...) — the suite only reads keys, it never generates them, and no
   example touches a real key or a real server. Regenerate fixtures with
