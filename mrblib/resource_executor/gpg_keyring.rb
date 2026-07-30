@@ -57,6 +57,41 @@ module ::MItamae
         # so the whole output is searched rather than a "Pubkey:" line.
         ECC_ALGORITHM_NAMES = %w[ECDH ECDSA EDDSA].freeze
 
+        # export-minimal drops third-party signatures, so the placed file
+        # stays deterministic no matter what the source attached to the key
+        # (keyservers since GnuPG 2.2.17 already strip them on receive,
+        # older ones do not). Revocation signatures are self-signatures and
+        # survive this.
+        EXPORT_OPTIONS = ['--export-options', 'export-minimal'].freeze
+
+        # The files gpg keeps directly in a homedir, across the versions
+        # this resource supports: 1.4's keyrings next to 2.x's keybox, and
+        # the state they write. 2.x's sockets are matched by their S.
+        # prefix, and its configuration by the .conf suffix rather than by
+        # name - gpg, gpg-agent, dirmngr, scdaemon, keyboxd and whatever
+        # component comes next each read one, none of them is a place for
+        # a keyring, and --no-options does not cover them anyway (they are
+        # read by the libraries, not by gpg's option parser).
+        GPG_HOMEDIR_FILES = %w[
+          pubring.gpg pubring.gpg~ pubring.kbx pubring.kbx~ secring.gpg
+          trustdb.gpg tofu.db random_seed .gpg-v21-migrated
+          sshcontrol trustlist.txt
+        ].freeze
+
+        # The directories gpg keeps under a homedir. Nothing inside them is
+        # a place for a keyring either - public-keys.d holds the keyboxd
+        # database, and the rest hold key material and revocations.
+        GPG_HOMEDIR_DIRS = %w[
+          public-keys.d private-keys-v1.d openpgp-revocs.d crls.d
+        ].freeze
+
+        # What says a homedir has keys to look at, one list per store:
+        # 2.x's keybox alongside 1.4's keyring, and the keyboxd database
+        # that replaces both in a homedir whose common.conf turns keyboxd
+        # on.
+        GPG_KEYRING_FILES = %w[pubring.kbx pubring.gpg].freeze
+        GPG_KEYBOXD_FILES = %w[public-keys.d/pubring.db].freeze
+
         # Public keyservers fail intermittently, so network fetches are
         # retried with exponential backoff before the run gives up.
         RETRY_LIMIT = 3
@@ -194,10 +229,290 @@ module ::MItamae
           [
             'gpg',
             '--homedir', homedir,
+            # A homedir given by the recipe belongs to the caller and may
+            # carry a gpg.conf whose options (armor, export-options, ...)
+            # would silently change what this resource writes. Everything
+            # this resource depends on is passed explicitly, so the config
+            # file is ignored outright and runs stay deterministic.
+            '--no-options',
+            # Nothing here consults the web of trust - the fingerprint
+            # picks the key - and without this gpg builds a trustdb the
+            # moment it reads a keyring, which in a homedir the recipe
+            # named is a database the caller never asked this resource to
+            # add. Accepted by every version in range (1.4.2 and up).
+            '--trust-model', 'always',
             '--quiet',
             '--batch',
             '--with-colons',
           ].concat(args)
+        end
+
+        # gpg only auto-creates the default ~/.gnupg; an explicit --homedir
+        # that does not exist just fails ("no writable keyring found"). The
+        # mode applies to directories this creates - an existing homedir
+        # keeps whatever permissions its owner chose.
+        def prepare_homedir(homedir)
+          result = run_command(['mkdir', '-p', '-m', '0700', homedir], error: false)
+          if result.exit_status != 0
+            raise MItamae::Backend::CommandExecutionError, "gpg homedir: #{homedir}"
+          end
+        end
+
+        # The keyring file is placed after the homedir has been updated, so
+        # a target inside the homedir lands on whatever gpg keeps under
+        # that name - and the run still exits 0, with the damage showing up
+        # only the next time that homedir is used. The check is on the name
+        # rather than on what is there: gpg creates most of these on
+        # demand, so "not there yet" is no reason to allow the collision.
+        # Every layout in range is covered at once - 1.4's pubring.gpg,
+        # 2.x's pubring.kbx, keyboxd's public-keys.d - as are 2.x's
+        # sockets, by their S. prefix.
+        def verify_target_outside_homedir(homedir)
+          relative = homedir_relative_path(homedir)
+          return if relative.nil?
+
+          entry = relative.split('/')[0]
+          if relative.include?('/')
+            if GPG_HOMEDIR_DIRS.include?(entry)
+              raise "#{attributes.path} is inside #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+            end
+          elsif GPG_HOMEDIR_FILES.include?(entry) or entry.start_with?('S.') or entry.end_with?('.conf')
+            raise "#{attributes.path} is a file gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+          end
+
+          # Any other name in there is the recipe's business - it works,
+          # and the resource has no say in how someone lays out their
+          # directories. Still worth a word: nothing but this warning
+          # stands between that layout and a name gpg decides to use.
+          MItamae.logger.warn "keyring path is inside the gpg homedir: #{attributes.path} (it is written after the homedir is updated, so a name gpg uses would be overwritten)"
+        end
+
+        # Where the target sits under the homedir, or nil if it is outside
+        # it. Both sides are resolved first, because the classification
+        # above reads a path as written while the write follows what the
+        # path actually leads to: `./gnupg` and `gnupg` are the same
+        # directory, so are two names joined by a symlink, and a symlink
+        # anywhere in between - `gnupg/keys` pointing at
+        # `gnupg/public-keys.d` - hides a protected directory behind an
+        # unprotected name. Both go through the same resolver, or the
+        # comparison could be of one path resolved against another as
+        # written, which agrees on nothing.
+        def homedir_relative_path(homedir)
+          root = resolve_path(homedir)
+          target = resolve_path(attributes.path)
+
+          # `/` is its own separator, so the prefix is built rather than
+          # concatenated: `//` matches nothing, and a homedir of `/` would
+          # have every target read as outside it.
+          prefix = root.eql?('/') ? '/' : root + '/'
+          return nil unless target.start_with?(prefix)
+
+          target[prefix.length..-1]
+        end
+
+        # The shell does the resolving, since it walks every component of a
+        # path for free and needs no realpath(1) - not every box has one,
+        # and the ones that do disagree about the flags.
+        #
+        # `dir_of` answers for a path's directory, and answers for one that
+        # is not there yet: it descends to the deepest directory that does
+        # exist, resolves that, and puts the rest back. A directory this
+        # run is about to create - keyboxd's public-keys.d, say - is then
+        # still named as what it will be, rather than losing the path to a
+        # failed `cd`. A component that is a symlink to something not there
+        # yet is followed on the way down, since it will lead there as soon
+        # as the import creates it.
+        #
+        # Around it, the last component is followed for as long as it keeps
+        # being a symlink, because writing the keyring writes through the
+        # whole chain, and the directory is resolved again after every hop
+        # so a link that leads out of the homedir is read as leading out of
+        # it. The hop count is what a chain cannot outlast: Linux gives up
+        # at 40 itself, and stopping there means a loop ends the walk
+        # instead of spinning it. Still a symlink by then is a path that
+        # cannot be resolved, and is reported as such rather than answered
+        # with the last name the walk happened to be on.
+        #
+        # A path that is already a directory takes none of that: `cd` into
+        # it and it says where it is. This is also what keeps `/` out of
+        # the walk, whose basename is `/` again.
+        RESOLVE_PATH = [
+          'if [ -d "$1" ]; then',
+          '  cd -- "$1" 2>/dev/null && pwd -P',
+          '  exit',
+          'fi',
+          'dir_of() {',
+          '  p=$(dirname -- "$1")',
+          '  t=',
+          '  m=0',
+          '  while [ ! -d "$p" ]; do',
+          '    case $p in /|.) break ;; esac',
+          '    if [ -L "$p" ]; then',
+          '      m=$((m + 1))',
+          '      [ "$m" -gt 40 ] && return 1',
+          '      k=$(readlink -- "$p")',
+          '      case $k in /*) ;; *) k=$(dirname -- "$p")/$k ;; esac',
+          '      p=$k',
+          '      continue',
+          '    fi',
+          '    t=$(basename -- "$p")${t:+/$t}',
+          '    p=$(dirname -- "$p")',
+          '  done',
+          '  r=$(cd -- "$p" 2>/dev/null && pwd -P) || return 1',
+          '  case $r in /) r= ;; esac',
+          '  printf "%s" "$r${t:+/$t}"',
+          '}',
+          'd=$(dir_of "$1") || exit 1',
+          'b=$(basename -- "$1")',
+          'n=0',
+          'while [ -L "$d/$b" ]; do',
+          '  n=$((n + 1))',
+          '  [ "$n" -gt 40 ] && exit 1',
+          '  l=$(readlink -- "$d/$b")',
+          '  case $l in /*) ;; *) l=$d/$l ;; esac',
+          '  d=$(dir_of "$l") || exit 1',
+          '  b=$(basename -- "$l")',
+          'done',
+          'printf "%s/%s" "$d" "$b"',
+        ].join("\n").freeze
+
+        # A path that cannot be resolved at all - a symlink loop - is left
+        # as written and only expanded. Nothing can be written through it
+        # either, so it is not a way past the checks above.
+        #
+        # A leading `//` survives the resolving: POSIX leaves it to the
+        # implementation, and Linux answers `cd //tmp && pwd -P` with
+        # `//tmp` while meaning the same directory as `/tmp`. Two paths
+        # for one directory is the thing this whole comparison is trying
+        # not to be fooled by, so it is collapsed here.
+        def resolve_path(path)
+          result = run_command(['sh', '-c', RESOLVE_PATH, 'sh', path], error: false)
+          resolved = result.exit_status == 0 ? result.stdout.strip : File.expand_path(path)
+          resolved.sub(/\A\/\/+/, '/')
+        end
+
+        def list_keys(homedir)
+          result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
+          if result.exit_status != 0
+            raise MItamae::Backend::CommandExecutionError, "gpg list keys: #{homedir}"
+          end
+
+          parse_colons(result.stdout.lines)
+        end
+
+        # The same listing, asked about a homedir that is the caller's
+        # rather than this resource's, which changes both what a failure
+        # means and where the question may be put. The only thing being
+        # asked is whether the fetch can be skipped, so a homedir with
+        # nothing to offer - not there yet, no store in it yet, or refused
+        # by gpg for reasons of its own - is read as holding nothing and
+        # the fetch goes ahead.
+        #
+        # The caller's directory is never the one handed to gpg. gpg does
+        # not just read a homedir it is pointed at, and no option makes it:
+        # a listing creates the store its configuration names, builds a
+        # trustdb (--trust-model always covers that one), and on a keyboxd
+        # homedir starts the daemon, which adds its socket and a lock file
+        # and then stays running. This lookup happens before the fetched
+        # key has been verified, so all of that would be state left in a
+        # caller's directory by a run that went on to reject the key. What
+        # is listed instead is a throwaway homedir holding a copy of the
+        # store - the same files homedir_store_files names, so nothing new
+        # has to be kept current - and whatever gpg initializes it with is
+        # thrown away with it.
+        #
+        # A missing directory is answered without any of that, and saying
+        # so beats offering it to gpg, which only draws a "Fatal:" line
+        # that reads like a real problem in the log.
+        def homedir_keys(homedir)
+          if run_command(['test', '-d', homedir], error: false).exit_status != 0
+            # Said out loud rather than logged at debug: a homedir that is
+            # not there is as likely to be a typo in the recipe as a first
+            # run, and the two look identical from here - both fetch, and
+            # both end with a directory of that name holding the key.
+            MItamae.logger.warn "gpg homedir does not exist: #{homedir} (created with mode 0700 once a fetched key has been verified)"
+            return []
+          end
+
+          keyboxd = keyboxd_homedir?(homedir)
+          names = homedir_store_files(homedir, keyboxd)
+          return [] if names.empty?
+
+          records = []
+          Dir.mktmpdir{|workdir|
+            copy = File.join(workdir, 'gnupg')
+            prepare_homedir(copy)
+
+            # Written rather than copied from the caller's: the only thing
+            # the copy needs from common.conf is which store to read, and
+            # the rest of that file is the caller's configuration, which
+            # --no-options exists to keep out of this resource's runs.
+            if keyboxd
+              File.open(File.join(copy, 'common.conf'), 'w') do |f|
+                f.write("use-keyboxd\n")
+              end
+            end
+
+            if copy_store_files(homedir, copy, names)
+              result = run_command(gpg(copy, LIST_OPTIONS), error: false)
+              records = parse_colons(result.stdout.lines) if result.exit_status == 0
+            end
+
+            kill_keyboxd(copy) if keyboxd
+          }
+          records
+        end
+
+        # The store files the homedir actually has, asked of the store its
+        # configuration selects rather than of whatever store file happens
+        # to be in it. The two can disagree - a migration onto keyboxd left
+        # half done, or `use-keyboxd` taken back out again - and a homedir
+        # configured for a store it does not have holds no keys this can
+        # reuse, whatever else is lying in it.
+        def homedir_store_files(homedir, keyboxd)
+          names = keyboxd ? GPG_KEYBOXD_FILES : GPG_KEYRING_FILES
+          names.select {|name|
+            run_command(['test', '-e', File.join(homedir, name)], error: false).exit_status == 0
+          }
+        end
+
+        # Copies the store into the throwaway homedir. A failure is not
+        # raised on: an unreadable store is one more homedir with nothing
+        # to offer, and the fetch that follows is the answer to that.
+        def copy_store_files(homedir, copy, names)
+          names.all? {|name|
+            parent = File.dirname(File.join(copy, name))
+            if parent != copy
+              result = run_command(['mkdir', '-p', '-m', '0700', parent], error: false)
+              next false if result.exit_status != 0
+            end
+
+            run_command(['cp', File.join(homedir, name), File.join(copy, name)], error: false).exit_status == 0
+          }
+        end
+
+        # The daemon a keyboxd listing starts outlives the directory it was
+        # started for, so it is asked to stop before that directory goes.
+        # `gpgconf --kill` is not the way to ask: GnuPG 2.4 exits 0 for
+        # keyboxd and leaves it running. Nothing here is fatal - a stray
+        # daemon holding a deleted temporary directory is untidy, not
+        # wrong - so every step may fail quietly.
+        def kill_keyboxd(homedir)
+          result = run_command(['gpgconf', '--homedir', homedir, '--list-dirs', 'socketdir'], error: false)
+          return if result.exit_status != 0
+
+          socket = File.join(result.stdout.strip, 'S.keyboxd')
+          run_command(['gpg-connect-agent', '-S', socket, 'KILLKEYBOXD', '/bye'], error: false)
+        end
+
+        # common.conf is read by every GnuPG component rather than by gpg's
+        # option parser, so --no-options does not turn `use-keyboxd` off:
+        # what it says goes, and this reads the same file to find out.
+        def keyboxd_homedir?(homedir)
+          result = run_command(['cat', File.join(homedir, 'common.conf')], error: false)
+          return false if result.exit_status != 0
+
+          result.stdout.lines.any? {|line| line.strip.split(' ')[0].eql?('use-keyboxd') }
         end
 
         # gpg escapes ':' and '\' (and control characters) in colon-format
@@ -302,6 +617,14 @@ module ::MItamae
             desired.keyserver = 'hkps://keys.openpgp.org'
           end
           MItamae.logger.debug "keyserver: #{desired.keyserver}"
+
+          if desired.homedir
+            MItamae.logger.debug "homedir: #{desired.homedir}"
+            # Decided from the recipe alone, so it is settled here rather
+            # than on the path that writes: a keyring aimed at one of
+            # gpg's own files is wrong for the delete action too.
+            verify_target_outside_homedir(desired.homedir)
+          end
         end
 
         def set_current_attributes(current, action)
@@ -314,23 +637,21 @@ module ::MItamae
 
           return unless current.exist
 
-          lines = []
+          records = []
 
+          # Reading the placed file always uses a throwaway homedir, even
+          # when the recipe names one: importing into the recipe's homedir
+          # would both mutate it and mix its other keys into this listing,
+          # which the multi-key guard below reads as the file's contents.
           Dir.mktmpdir{|homedir|
             result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', attributes.path]), error: false)
             if result.exit_status != 0
               raise_command_failure("gpg import key: #{attributes.path}", unsupported_algorithm_note(attributes.path))
             end
 
-            result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
-            if result.exit_status != 0
-              raise MItamae::Backend::CommandExecutionError, "gpg show fingerprint"
-            end
-
-            lines = result.stdout.lines
+            records = list_keys(homedir)
           }
 
-          records = parse_colons(lines)
           if records.empty?
             raise "no key could be read from #{attributes.path} (gpg cannot import a key that has no user id packet at all)"
           end
@@ -377,66 +698,85 @@ module ::MItamae
         end
 
         def pre_action
-          Dir.mktmpdir{|homedir|
+          Dir.mktmpdir{|workdir|
             # desired.exist is false for the delete action: nothing to
             # fetch when the file is being removed.
             if desired.exist and ((!desired.content and !current.exist) or current.fingerprint != desired.fingerprint)
-              if desired.url
-                MItamae.logger.debug "gpg download url: #{desired.url}"
-
-                result = with_retry("gpg download key: url: #{desired.url}") {
-                  run_command(['curl', '-fsSL', '-o', "/tmp/#{desired.fingerprint}", desired.url], error: false)
-                }
-                if result.exit_status != 0
-                  raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{desired.url}"
-                end
-
-                result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', "/tmp/#{desired.fingerprint}"]), error: false)
-                if result.exit_status != 0
-                  raise_command_failure("gpg import key: fingerprint: #{desired.fingerprint}", unsupported_algorithm_note("/tmp/#{desired.fingerprint}"))
-                end
-              else
-                MItamae.logger.debug "gpg download keyserver: #{desired.keyserver}"
-
-                File.open(File.join(homedir, 'gpg.conf'), 'w') do |f|
-                  f.write("keyserver #{desired.keyserver}")
-                end
-
-                # --recv-keys, not its --receive-keys alias: GnuPG 1.4
-                # only knows the short spelling, 2.x knows both.
-                result = with_retry("gpg receive key: keyserver: #{desired.keyserver}") {
-                  run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--recv-keys', desired.fingerprint]), error: false)
-                }
-                if result.exit_status != 0
-                  raise_command_failure("gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}", missing_ecc_note)
-                end
-              end
-
-              result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
-              if result.exit_status != 0
-                raise MItamae::Backend::CommandExecutionError, 'gpg list fetched keys'
-              end
-
-              # Verify the fetched key before the export: a key that is not
-              # what the recipe claims must never reach the target file.
-              records = parse_colons(result.stdout.lines)
-              source = desired.url ? desired.url : desired.keyserver
+              # A homedir named by the recipe outlives the run and doubles
+              # as a key store: when it already holds the pinned key there
+              # is nothing to fetch, which is what makes the attribute
+              # usable on hosts without network access. Refreshing such a
+              # key is the homedir owner's job (drop it and run again) -
+              # like an already-placed keyring file, it is never re-fetched
+              # on its own.
+              records = desired.homedir ? homedir_keys(desired.homedir) : []
               record = records.detect {|r| r[:fingerprint] == desired.fingerprint }
+
+              if record
+                homedir = desired.homedir
+                source = desired.homedir
+                MItamae.logger.debug "gpg key already in homedir: #{desired.homedir}"
+              else
+                # Fetching happens in a throwaway homedir even when the
+                # recipe names one. What a URL or a keyserver hands over is
+                # unverified until the checks below have run, and importing
+                # it into the caller's keyring first would leave it there
+                # whether or not it turns out to be the key that was asked
+                # for. The downloaded file and the export output stay in
+                # workdir for the same reason.
+                homedir = File.join(workdir, 'gnupg')
+                prepare_homedir(homedir)
+
+                if desired.url
+                  MItamae.logger.debug "gpg download url: #{desired.url}"
+
+                  download = File.join(workdir, desired.fingerprint)
+
+                  result = with_retry("gpg download key: url: #{desired.url}") {
+                    run_command(['curl', '-fsSL', '-o', download, desired.url], error: false)
+                  }
+                  if result.exit_status != 0
+                    raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{desired.url}"
+                  end
+
+                  result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', download]), error: false)
+                  if result.exit_status != 0
+                    raise_command_failure("gpg import key: fingerprint: #{desired.fingerprint}", unsupported_algorithm_note(download))
+                  end
+                else
+                  MItamae.logger.debug "gpg download keyserver: #{desired.keyserver}"
+
+                  # The keyserver is passed on the command line rather than
+                  # written to the homedir's gpg.conf, which --no-options
+                  # ignores anyway.
+                  #
+                  # --recv-keys, not its --receive-keys alias: GnuPG 1.4
+                  # only knows the short spelling, 2.x knows both.
+                  result = with_retry("gpg receive key: keyserver: #{desired.keyserver}") {
+                    run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--keyserver', desired.keyserver, '--recv-keys', desired.fingerprint]), error: false)
+                  }
+                  if result.exit_status != 0
+                    raise_command_failure("gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}", missing_ecc_note)
+                  end
+                end
+
+                records = list_keys(homedir)
+                source = desired.url ? desired.url : desired.keyserver
+                record = records.detect {|r| r[:fingerprint] == desired.fingerprint }
+              end
+
+              # Verify the key before the export: a key that is not what the
+              # recipe claims must never reach the target file.
               if record.nil?
                 raise_if_sub_key_fingerprint(records, source)
                 raise "gpg fetched key does not contain fingerprint #{desired.fingerprint}: got #{records.map {|r| r[:fingerprint] }.inspect} (#{source})"
               end
               verify_user_id(record[:uids], source)
 
-              # export-minimal drops third-party signatures, so the placed
-              # file stays deterministic no matter what the source attached
-              # to the key (keyservers since GnuPG 2.2.17 already strip them
-              # on receive, older ones do not). Revocation signatures are
-              # self-signatures and survive this.
               if File.extname(attributes.path).eql?('.gpg')
-                opts = ['--export-options', 'export-minimal', '--export', desired.fingerprint]
+                opts = EXPORT_OPTIONS + ['--export', desired.fingerprint]
               else
-                opts = ['--export-options', 'export-minimal', '--export', '--armor', desired.fingerprint]
+                opts = EXPORT_OPTIONS + ['--export', '--armor', desired.fingerprint]
               end
 
               result = run_command(gpg(homedir, opts), error: false)
@@ -444,11 +784,26 @@ module ::MItamae
                 raise MItamae::Backend::CommandExecutionError, "gpg export key: fingerprint: #{desired.fingerprint}"
               end
 
-              Dir.mkdir(File.join(homedir, 'download'), 0755)
-              File.open(File.join(homedir, 'download', desired.fingerprint), 'w') do |f|
+              Dir.mkdir(File.join(workdir, 'download'), 0755)
+              File.open(File.join(workdir, 'download', desired.fingerprint), 'w') do |f|
                 f.write(result.stdout)
               end
-              @tempfile = File.join(homedir, 'download', desired.fingerprint)
+              @tempfile = File.join(workdir, 'download', desired.fingerprint)
+
+              # What a recipe's homedir receives is the exported keyring
+              # itself: verified, and stripped to the same self-signatures
+              # the target file gets. Nothing reaches it that did not first
+              # earn its way into the file.
+              if desired.homedir and homedir != desired.homedir
+                MItamae.logger.debug "gpg keep key in homedir: #{desired.homedir}"
+
+                prepare_homedir(desired.homedir)
+
+                result = run_command(gpg(desired.homedir, IMPORT_OPTIONS + ['--import', @tempfile]), error: false)
+                if result.exit_status != 0
+                  raise MItamae::Backend::CommandExecutionError, "gpg import key into homedir: #{desired.homedir}"
+                end
+              end
             end
 
             super
