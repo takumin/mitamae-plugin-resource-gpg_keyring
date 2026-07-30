@@ -111,6 +111,14 @@ not in a `run:` block.
 - Permissions start at `{}` and are granted per job, actions are pinned
   to full commit SHAs with a version comment, checkouts do not persist
   credentials, and every job has a timeout.
+- Renovate (`renovate.json`) keeps the pins fresh — action SHAs, gems and
+  the `aqua.yaml` tool versions, the last of which is why it is Renovate
+  and not Dependabot: Dependabot has no aqua ecosystem. It extends
+  `config:best-practices` (which already implies
+  `helpers:pinGitHubActionDigests`, so a newly added action gets pinned to
+  a SHA) plus `github>aquaproj/aqua-renovate-config`. Actions, gems and
+  aqua tools are grouped into one PR each, weekly. The app has to be
+  installed on the repository for any of this to run.
 - `BUNDLE_FROZEN` is set workflow-wide, so a `Gemfile.lock` that does not
   match `Gemfile` fails CI instead of being relocked.
 - `Gemfile.lock` lists the darwin and aarch64 platforms even though CI

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    "github>aquaproj/aqua-renovate-config#2.13.0"
+  ],
+  "timezone": "Asia/Tokyo",
+  "schedule": ["before 9am on monday"],
+  "packageRules": [
+    {
+      "description": "The action pins move together; splitting them buys nothing at this size.",
+      "matchManagers": ["github-actions"],
+      "groupName": "actions"
+    },
+    {
+      "description": "BUNDLE_FROZEN means Gemfile and Gemfile.lock have to land in the same commit anyway.",
+      "matchManagers": ["bundler"],
+      "groupName": "gems"
+    },
+    {
+      "description": "An aqua.yaml bump leaves aqua-checksums.json stale, which require_checksum turns into a hard CI failure. One PR means one `rake checksum` to fix them all.",
+      "matchFileNames": ["aqua.yaml"],
+      "groupName": "aquas"
+    }
+  ]
+}
