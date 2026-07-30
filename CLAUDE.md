@@ -86,15 +86,16 @@ use `@codex review` to trigger the *first* review — marking a draft ready
 does that, and when a PR stops being a draft is the owner's call, never
 Claude's.
 
-A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR,
-provided it is newer than the commit it approves. Two things can make a
-👍 the wrong signal, and both have to be checked:
+A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR —
+of the revision it was left for. Two things can make a 👍 the wrong
+signal, and both have to be checked:
 
 - **Who left it.** A 👍 from anyone else is not it.
-- **When.** The 👍 sits on the PR, not on a commit, and nothing takes it
-  back when the branch moves on. After a push, the old 👍 is still there
-  to be found, and merging on it merges a revision Codex never read.
-  Compare its timestamp against the head commit's before believing it.
+- **Which commit it was left for.** The 👍 sits on the PR, not on a
+  commit, and nothing takes it back when the branch moves on. After a
+  push the old 👍 is still there to be found, and merging on it merges a
+  revision Codex never read. Every Codex verdict names the revision it
+  read as `Reviewed commit: <sha>`; require that to be the current head.
 
 So a fix pushed for review feedback always has to earn a new 👍 through
 `@codex review` — which is why that step is not optional. Merge with a
@@ -113,14 +114,32 @@ per page by default, so on a busy PR a 👍 can sit past the first page and
 read as no 👍 at all — which fails in the direction of waiting forever.
 Drop the `content` filter to see every reaction instead of only 👍.
 
-The timestamp to compare a 👍 against is the head commit's:
+The revision that 👍 was left for is whatever Codex last reported as
+`Reviewed commit`. It writes that line into an issue comment when the
+review is clean and into the review body when it has findings, so both
+lists are read and the newest entry wins:
 
     repo=repos/takumin/mitamae-plugin-resource-gpg_keyring
-    sha=$(curl -sS "https://api.github.com/$repo/pulls/<number>" | jq -r .head.sha)
-    curl -sS "https://api.github.com/$repo/commits/$sha" | jq -r .commit.committer.date
+    n=<number>
+    curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r .head.sha
+    { curl -sS "https://api.github.com/$repo/issues/$n/comments?per_page=100"
+      curl -sS "https://api.github.com/$repo/pulls/$n/reviews?per_page=100"; } |
+      jq -r '.[] | select(.user.login=="chatgpt-codex-connector[bot]")
+           | [(.submitted_at // .created_at),
+              ((.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) // empty)]
+           | @tsv' | sort | tail -1
 
-`pulls/<number>/reviews` looks like the better source, since its entries
-carry a `commit_id`, but a clean verdict never creates one: Codex opens a
-review only when it has findings and answers a clean pass with the 👍 and
-a plain comment. The timestamps are what distinguish a fresh 👍 from a
-stale one.
+The sha is abbreviated, so compare it as a prefix of the head sha.
+
+Do not reach for timestamps here. Comparing the 👍 against the head
+commit's `committer.date` looks equivalent and is not: that date is when
+the commit was written, not when the branch received it. Write a commit
+locally, let Codex review and 👍 the older head, then push what was
+already sitting there, and the stale 👍 is newer than the new head's
+date — the check passes and the merge is of unreviewed code. Codex's own
+`Reviewed commit` has no such gap: it names a revision rather than a
+moment.
+
+`pulls/<number>/reviews` alone would be tidier, since its entries carry a
+`commit_id` field, but a clean verdict never creates a review object —
+which is exactly the case that ends in a merge.
