@@ -61,8 +61,15 @@ them; `rake lint` depends on it.
 
 ## Testing
 
+- `bundle exec rake` — the full pipeline (`lint` then `test`). Keep it
+  green.
 - `bundle exec rake test` — the whole suite, fully offline. This is the
   default gate; keep it green.
+- `bundle exec rake lint` — actionlint over `.github/workflows/`. It
+  depends on `rake tool`, so the pinned actionlint is installed first.
+  actionlint delegates `run:` blocks to shellcheck, which is pinned
+  alongside it: the findings are the same everywhere instead of tracking
+  whatever shellcheck a runner image happens to ship.
 - `bundle exec rake tool` — `aqua install` for the tools in `aqua.yaml`.
   Idempotent, so it is cheap to depend on.
 - The url/keyserver examples run against a local fixture server on

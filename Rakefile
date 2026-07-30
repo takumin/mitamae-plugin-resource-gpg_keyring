@@ -8,4 +8,5 @@ task :clean do
   sh 'git', 'clean', '-xdf'
 end
 
-task default: :test
+# The full pipeline, identical to what CI runs (see .github/workflows/ci.yml).
+task default: %i[lint test]
