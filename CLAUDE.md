@@ -31,11 +31,40 @@ test gems nor mitamae:
   downloads the pinned release (`MITAMAE_VERSION`, currently v2.0.2) into
   `.bin/`, verified against the `SHA256SUMS` published with that release.
   Override with `MITAMAE=/path/to/binary`.
+- `rake test` needs nothing else. `rake lint` additionally needs
+  [aqua](https://aquaproj.github.io/docs/install) on PATH — see below.
+
+## CLI tooling (aqua)
+
+`aqua.yaml` pins the CLI tools the pipeline shells out to (actionlint,
+shellcheck) with `aqua-checksums.json` covering linux and darwin on both
+architectures, and `checksum.require_checksum` on, so an unrecorded
+artifact is a hard failure rather than a warning. `rake tool` installs
+them; `rake lint` depends on it.
+
+- Bumping a tool: change the version in `aqua.yaml`, run
+  `bundle exec rake checksum`, commit both files. The hashes cannot be
+  derived from the version, so the two always move together.
+- aqua itself is bootstrapped outside the task runner (a tool manager
+  cannot install itself).
+- mitamae is deliberately **not** in `aqua.yaml`: the standard registry's
+  entry still expects a `.tar.gz` asset, and mitamae has shipped raw
+  binaries since v2, so `itamae-kitchen/mitamae@v2.0.2` cannot resolve.
+  `spec_helper`'s own fetch gives the same guarantee (pinned release,
+  checksum verified). Move it into `aqua.yaml` once the registry supports
+  v2 — and drop one of the two pins when you do.
+- Some sandboxes (the Claude Code web container among them) block
+  `api.github.com` and sigstore, which makes aqua's GitHub Artifact
+  Attestations check fail for actionlint. That is the sandbox, not the
+  config; `AQUA_DISABLE_GITHUB_ARTIFACT_ATTESTATION=true` gets you a local
+  run.
 
 ## Testing
 
 - `bundle exec rake test` — the whole suite, fully offline. This is the
   default gate; keep it green.
+- `bundle exec rake tool` — `aqua install` for the tools in `aqua.yaml`.
+  Idempotent, so it is cheap to depend on.
 - The url/keyserver examples run against a local fixture server on
   `127.0.0.1:39418` started by the suite (`spec/support/local_server.rb`;
   HKP is plain HTTP, so it serves both curl downloads and
