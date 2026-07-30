@@ -1,0 +1,32 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/main/json-schema/aqua-yaml.json
+#
+# The CLI tools the pipeline shells out to, pinned by aqua so a laptop and
+# CI run the same binaries. Install them with `rake tool`.
+#
+# mitamae is deliberately not here: the standard registry still expects a
+# .tar.gz asset, while mitamae ships raw binaries since v2, so
+# `itamae-kitchen/mitamae@v2.0.2` cannot resolve. spec/spec_helper.rb
+# fetches it instead (pinned release, verified against the SHA256SUMS
+# published with it) - move it here once the registry supports v2.
+checksum:
+  enabled: true
+  require_checksum: true
+  supported_envs:
+    - darwin
+    - linux
+
+registries:
+  - type: standard
+    ref: v4.545.0
+
+packages:
+  # The three angles `rake lint` looks at .github/workflows/ from: does
+  # it parse, is it safe, are its actions pinned.
+  - name: rhysd/actionlint@v1.7.12
+  - name: zizmorcore/zizmor@v1.28.0
+  - name: suzuki-shunsuke/pinact@v4.1.1
+  # actionlint shells out to shellcheck for `run:` blocks when it is on
+  # PATH. Pinning it keeps the findings identical everywhere, instead of
+  # depending on whatever version a runner image happens to ship.
+  - name: koalaman/shellcheck@v0.11.0

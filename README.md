@@ -1,5 +1,7 @@
 # mitamae-plugin-resource-gpg_keyring
 
+[![CI](https://github.com/takumin/mitamae-plugin-resource-gpg_keyring/actions/workflows/ci.yml/badge.svg)](https://github.com/takumin/mitamae-plugin-resource-gpg_keyring/actions/workflows/ci.yml)
+
 A [mitamae](https://github.com/itamae-kitchen/mitamae) plugin that places a
 GPG public keyring file idempotently (e.g. apt keyrings referenced by
 `Signed-By`).

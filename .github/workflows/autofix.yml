@@ -1,0 +1,60 @@
+---
+# The name below is not cosmetic: the autofix.ci action refuses to run
+# unless GITHUB_WORKFLOW is exactly "autofix.ci", so that a workflow
+# cannot borrow the app's push rights under another identity.
+name: autofix.ci
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: autofix-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUNDLE_FROZEN: 'true'
+
+jobs:
+  autofix:
+    name: autofix.ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deliberately read-only. The job regenerates files but never pushes:
+    # it hands the diff to the autofix.ci app, which owns the write side.
+    # That is also what makes the fix commit re-trigger CI, which a push
+    # made with GITHUB_TOKEN would not.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: '3.4'
+
+      - name: Set up aqua
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.2
+          enable_aqua_install: 'false'
+
+      - name: Install gems
+        run: bundle install
+
+      # Both halves of what a bot leaves unfinished: Renovate raises the
+      # versions in aqua.yaml without the hashes that go with them, and an
+      # action added by tag is not pinned yet. The lint job rejects either,
+      # so regenerate them here rather than sending someone to a terminal.
+      - name: Regenerate the derived files
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bundle exec rake fix
+
+      - name: Push the fix
+        uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a # v1.3.4

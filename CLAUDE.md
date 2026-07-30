@@ -31,11 +31,59 @@ test gems nor mitamae:
   downloads the pinned release (`MITAMAE_VERSION`, currently v2.0.2) into
   `.bin/`, verified against the `SHA256SUMS` published with that release.
   Override with `MITAMAE=/path/to/binary`.
+- `rake test` needs nothing else. `rake lint` additionally needs
+  [aqua](https://aquaproj.github.io/docs/install) on PATH — see below.
+
+## CLI tooling (aqua)
+
+`aqua.yaml` pins the CLI tools the pipeline shells out to (actionlint,
+zizmor, pinact, shellcheck) with `aqua-checksums.json` covering linux and
+darwin on both architectures, and `checksum.require_checksum` on, so an
+unrecorded artifact is a hard failure rather than a warning. `rake tool`
+installs them; `rake lint` depends on it.
+
+- Bumping a tool: change the version in `aqua.yaml`, run
+  `bundle exec rake checksum` (or `rake fix`), commit both files.
+  Renovate raises the version but cannot compute the hashes, so on a bot
+  PR the `autofix.ci` workflow runs it instead; the manual command is
+  only for local bumps.
+- aqua itself is bootstrapped outside the task runner (a tool manager
+  cannot install itself); CI uses the `aquaproj/aqua-installer` action
+  with `enable_aqua_install: 'false'` so that installing the *tools* stays
+  the `rake tool` task's job.
+- mitamae is deliberately **not** in `aqua.yaml`: the standard registry's
+  entry still expects a `.tar.gz` asset, and mitamae has shipped raw
+  binaries since v2, so `itamae-kitchen/mitamae@v2.0.2` cannot resolve.
+  `spec_helper`'s own fetch gives the same guarantee (pinned release,
+  checksum verified). Move it into `aqua.yaml` once the registry supports
+  v2 — and drop one of the two pins when you do.
+- Some sandboxes (the Claude Code web container among them) block
+  `api.github.com` and sigstore, so aqua's signature checks fail there —
+  the sandbox, not the config. `AQUA_DISABLE_GITHUB_ARTIFACT_ATTESTATION`,
+  `AQUA_DISABLE_SLSA` and `AQUA_DISABLE_COSIGN` set to `true` get you a
+  local run; the hashes in `aqua-checksums.json` are unaffected by them,
+  and CI verifies the signatures for real.
 
 ## Testing
 
+- `bundle exec rake` — the full pipeline (`lint` then `test`), identical
+  to what CI runs. Keep it green.
 - `bundle exec rake test` — the whole suite, fully offline. This is the
   default gate; keep it green.
+- `bundle exec rake lint` — three passes over `.github/workflows/`:
+  actionlint (does it parse; it delegates `run:` blocks to the pinned
+  shellcheck rather than a runner image's), zizmor (is it safe) and
+  pinact (is every action pinned to a SHA). All three run even when one
+  fails, so a finding never hides the next; `rake lint:zizmor` narrows to
+  one. zizmor runs `--offline` on purpose — its online audits resolve
+  refs through the GitHub API, which would make findings depend on
+  whether the caller holds a token, and the pinning they add is what
+  pinact answers anyway.
+- `bundle exec rake fix` — the write side of the above: regenerates
+  `aqua-checksums.json` (`rake checksum`) and pins any action still on a
+  tag (`rake pin`). This is what the `autofix.ci` workflow runs.
+- `bundle exec rake tool` — `aqua install` for the tools in `aqua.yaml`.
+  Idempotent, so it is cheap to depend on.
 - The url/keyserver examples run against a local fixture server on
   `127.0.0.1:39418` started by the suite (`spec/support/local_server.rb`;
   HKP is plain HTTP, so it serves both curl downloads and
@@ -50,6 +98,56 @@ test gems nor mitamae:
   from PATH. The ed25519 example is skipped there.
 - `bundle exec rake clean` removes downloaded binaries and generated
   files (`git clean -xdf`).
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on pushes to `main`, on pull requests,
+and on demand. It is a thin orchestrator: every job just calls a rake
+task, so CI never runs a command a contributor cannot run locally. Put
+new build/test/lint logic in a rake task and call it from the workflow —
+not in a `run:` block.
+
+- `lint` runs `rake tool` then `rake lint`; `test` runs `rake test`
+  across Ruby 3.2/3.3/3.4/4.0 on `ubuntu-latest`. Bundler 4, which
+  `Gemfile.lock` pins, needs Ruby >= 3.2, so that is the floor. Only the
+  `lint` job sets up aqua — the suite has no aqua-managed tool.
+- Linux only: this resource exists to place apt/rpm keyrings, so a macOS
+  leg would cost minutes to cover a platform nobody provisions. The
+  consequence is that the darwin/aarch64 branch of `spec_helper`'s
+  mitamae fetch is not exercised by CI.
+- The `ci` job aggregates the rest and is the single check to require in
+  branch protection; it only runs (and fails) when something upstream
+  failed or was cancelled.
+- Permissions start at `{}` and are granted per job, actions are pinned
+  to full commit SHAs with a version comment, checkouts do not persist
+  credentials, and every job has a timeout.
+- `.github/workflows/autofix.yml` regenerates what a bot leaves
+  unfinished: it runs `rake fix` on every pull request and hands the diff
+  to the autofix.ci app, which pushes the result. Two things about it are
+  load bearing. Its `name:` must be exactly `autofix.ci` or the action
+  refuses to run, and the job stays `contents: read` — the app owns the
+  write side, which is also why its commit re-triggers CI where a
+  `GITHUB_TOKEN` push would not. The app has to be installed on the
+  repository, like Renovate.
+- Renovate (`renovate.json`) keeps the pins fresh — action SHAs, gems and
+  the `aqua.yaml` tool versions, the last of which is why it is Renovate
+  and not Dependabot: Dependabot has no aqua ecosystem. It extends
+  `config:best-practices` (which already implies
+  `helpers:pinGitHubActionDigests`, so a newly added action gets pinned to
+  a SHA) plus `github>aquaproj/aqua-renovate-config`. Actions, gems and
+  aqua tools are grouped into one PR each, weekly. The app has to be
+  installed on the repository for any of this to run.
+- `BUNDLE_FROZEN` is set workflow-wide, so a `Gemfile.lock` that does not
+  match `Gemfile` fails CI instead of being relocked.
+- `Gemfile.lock` lists the darwin and aarch64 platforms even though CI
+  only runs `x86_64-linux`: it keeps a contributor on a Mac or an arm64
+  box from dirtying the lockfile on a plain `bundle install`. Re-add them
+  with `bundle lock --add-platform` if it is ever regenerated. The darwin
+  entries in `aqua-checksums.json` are there for the same reason —
+  without them `require_checksum` would reject the tools on a Mac.
+- No caching on purpose: the gems install in seconds and the pinned
+  binaries come from GitHub's own release CDN, so a cache would add
+  invalidation bugs without buying anything.
 
 ## Test layout
 
