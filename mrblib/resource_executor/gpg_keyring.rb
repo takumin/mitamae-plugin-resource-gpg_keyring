@@ -145,7 +145,9 @@ module ::MItamae
               if desired.url
                 MItamae.logger.debug "gpg download url: #{desired.url}"
 
-                result = run_command(['curl', '-fsSL', '-o', "/tmp/#{desired.fingerprint}", desired.url], error: false)
+                result = with_retry("gpg download key: url: #{desired.url}") {
+                  run_command(['curl', '-fsSL', '-o', "/tmp/#{desired.fingerprint}", desired.url], error: false)
+                }
                 if result.exit_status != 0
                   raise MItamae::Backend::CommandExecutionError, "gpg download key: url: #{desired.url}"
                 end
