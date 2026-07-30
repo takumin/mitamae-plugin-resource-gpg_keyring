@@ -70,7 +70,8 @@ test gems nor mitamae:
 
 Codex reviews pull requests here automatically. It starts when a draft is
 marked ready for review, or on an `@codex review` comment, and says where
-it is with reactions on the PR itself:
+it is with reactions on the PR itself, left by
+`chatgpt-codex-connector[bot]`:
 
 - 👀 — review running. Nothing to do but wait.
 - 👍 — review finished and found nothing.
@@ -83,10 +84,14 @@ use `@codex review` to trigger the *first* review — marking a draft ready
 does that, and when a PR stops being a draft is the owner's call, never
 Claude's.
 
-A 👍 on the PR is approval to merge it, whether it came from Codex having
-no findings or from the owner. Merge with a merge commit, matching the
-existing history.
+A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR.
+Who left it is the whole signal — a 👍 from anyone else is not it. Merge
+with a merge commit, matching the existing history.
 
-Reactions are not delivered over webhooks the way comments and checks are,
-so a 👍 is only noticed by looking for it — poll rather than wait for a
-notification that never comes.
+Reactions never arrive over webhooks the way comments and checks do, so a
+👍 is only seen by looking for it. Polling the PR is not enough either:
+neither the PR payload nor `issue_read` says who reacted, only how many
+did. Read the authors from the reactions API — this repository is public,
+so it needs no token:
+
+    curl -sS https://api.github.com/repos/takumin/mitamae-plugin-resource-gpg_keyring/issues/<number>/reactions
