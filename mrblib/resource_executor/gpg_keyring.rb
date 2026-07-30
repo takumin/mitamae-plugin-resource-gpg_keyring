@@ -17,9 +17,31 @@ module ::MItamae
         # "Valid import-options or export-options may be used here as well").
         KEYSERVER_IMPORT_OPTIONS = ['--keyserver-options', 'import-minimal'].freeze
 
+        # Public keyservers fail intermittently, so network fetches are
+        # retried with exponential backoff before the run gives up.
+        RETRY_LIMIT = 3
+        RETRY_INTERVAL = 2 # seconds, doubled after every failed attempt
+
         private
 
         @tempfile = nil
+
+        # Runs the block until its command result succeeds, backing off
+        # exponentially between attempts. Always returns the last result;
+        # raising on final failure stays at the call site.
+        def with_retry(subject)
+          interval = RETRY_INTERVAL
+          attempt = 1
+          while true
+            result = yield
+            return result if result.exit_status == 0
+            return result if attempt >= RETRY_LIMIT
+            MItamae.logger.warn "#{subject} failed (attempt #{attempt}/#{RETRY_LIMIT}), retrying in #{interval} seconds..."
+            sleep interval
+            attempt += 1
+            interval *= 2
+          end
+        end
 
         def gpg(homedir, args)
           [
@@ -139,7 +161,9 @@ module ::MItamae
                   f.write("keyserver #{desired.keyserver}")
                 end
 
-                result = run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--receive-keys', desired.fingerprint]), error: false)
+                result = with_retry("gpg receive key: keyserver: #{desired.keyserver}") {
+                  run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--receive-keys', desired.fingerprint]), error: false)
+                }
                 if result.exit_status != 0
                   raise MItamae::Backend::CommandExecutionError, "gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}"
                 end
