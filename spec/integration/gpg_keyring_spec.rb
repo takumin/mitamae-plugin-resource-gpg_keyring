@@ -63,6 +63,27 @@ RSpec.describe 'gpg_keyring' do
       expect(armored?(keyring)).to be(false)
       expect(fingerprint_of(keyring)).to eq('177ACBBF0F0DF7E60E58ACD618DE04FD1CEFC6E4')
     end
+
+    # gpg answers an ECC key it cannot parse with "no valid user IDs",
+    # which is about the one thing that is not wrong with the key.
+    it 'names the algorithm when the gpg in use cannot handle it' do
+      skip 'the gpg under test supports ECC' unless legacy_gpg?
+
+      run = run_mitamae('ed25519_key')
+      expect_mitamae_failure(run, /public key algorithm 22 \(EdDSA\), which the gpg in use does not support/)
+      expect(File.exist?(temporary('ed25519.gpg'))).to be(false)
+    end
+
+    it 'names the algorithm for an already-placed ECC keyring' do
+      skip 'the gpg under test supports ECC' unless legacy_gpg?
+
+      keyring = temporary('existing-ed25519.gpg')
+      FileUtils.cp(fixture('ed25519.asc'), keyring)
+
+      run = run_mitamae('existing_ed25519')
+      expect_mitamae_failure(run, /public key algorithm 22 \(EdDSA\), which the gpg in use does not support/)
+      expect(File.binread(keyring)).to eq(File.binread(fixture('ed25519.asc')))
+    end
   end
 
   describe 'keyserver receive' do
