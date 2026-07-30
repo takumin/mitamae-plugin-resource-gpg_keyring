@@ -116,6 +116,16 @@ FIXTURES = {
     key
   end,
 
+  # A key stripped down to its revoked uid only (0 valid uids), mimicking
+  # how keys.openpgp.org serves unverified keys.
+  'no-valid-uid.asc' => lambda do |gpg, path|
+    key = gpg.generate_key('Valid <valid@example.com>')
+    gpg.add_uid(key, 'Old <old@example.com>')
+    gpg.revoke_uid(key, 'Old <old@example.com>')
+    gpg.export(key, to: path, options: %w[--export-filter keep-uid=mbox=old@example.com])
+    key
+  end,
+
 }
 
 namespace :fixtures do

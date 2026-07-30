@@ -89,6 +89,25 @@ module ::MItamae
           records
         end
 
+        # user_id is an assertion, not a convergible attribute: a keyring
+        # cannot be "fixed" into carrying the requested uid, so a mismatch
+        # stops the run instead of updating the file. The match is an exact
+        # string comparison against the key's valid uids.
+        def verify_user_id(uids, source)
+          return unless desired.user_id
+
+          if uids.empty?
+            # Only raise when user_id was requested: keys.openpgp.org
+            # serves unverified keys without any user id, so an empty uid
+            # set is a normal state for fingerprint-only recipes.
+            raise "gpg user_id verification failed: key from #{source} has no valid user id; remove the user_id attribute if this is expected (keys.openpgp.org serves unverified keys without user ids)"
+          end
+
+          unless uids.include?(desired.user_id)
+            raise "gpg user_id verification failed: expected #{desired.user_id.inspect}, key from #{source} has #{uids.inspect}"
+          end
+        end
+
         def run_action(action)
           if run_command(['which', 'gpg'], error: false).exit_status != 0
             raise "`gpg` command is not available. Please install gnupg to use mitamae's gpg_keyring."
@@ -145,8 +164,22 @@ module ::MItamae
           else
             raise 'multiple pub keys'
           end
-          current.user_id = records[0][:uids].last
           MItamae.logger.debug "fingerprint: #{current.fingerprint}"
+
+          if current.fingerprint == desired.fingerprint
+            verify_user_id(records[0][:uids], attributes.path)
+            # Verification proved the exact match, so mirroring the desired
+            # string keeps the comparison type-safe: an Array here against
+            # the desired String would report a change on every run. Without
+            # user_id the comparison is skipped (the desired side is nil)
+            # and the full valid uid set is the honest current state.
+            current.user_id = desired.user_id ? desired.user_id : records[0][:uids]
+          else
+            # A key with a different fingerprint is about to be replaced;
+            # the replacement is verified after the fetch (pre_action), so
+            # asserting against the doomed key would only break rotation.
+            current.user_id = records[0][:uids].last
+          end
         end
 
         def content_file
@@ -184,6 +217,21 @@ module ::MItamae
                   raise MItamae::Backend::CommandExecutionError, "gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}"
                 end
               end
+
+              result = run_command(gpg(homedir, ['--fingerprint']), error: false)
+              if result.exit_status != 0
+                raise MItamae::Backend::CommandExecutionError, 'gpg list fetched keys'
+              end
+
+              # Verify the fetched key before the export: a key that is not
+              # what the recipe claims must never reach the target file.
+              records = parse_colons(result.stdout.lines)
+              source = desired.url ? desired.url : desired.keyserver
+              record = records.detect {|r| r[:fingerprint] == desired.fingerprint }
+              if record.nil?
+                raise "gpg fetched key does not contain fingerprint #{desired.fingerprint}: got #{records.map {|r| r[:fingerprint] }.inspect} (#{source})"
+              end
+              verify_user_id(record[:uids], source)
 
               # export-minimal drops third-party signatures, so the placed
               # file stays deterministic no matter what the source attached
