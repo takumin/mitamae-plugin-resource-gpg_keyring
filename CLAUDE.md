@@ -65,3 +65,28 @@ test gems nor mitamae:
   Regenerating changes the fingerprints, which are written literally in
   `test/recipe/` and `spec/`, so update them together (the task prints
   the new values).
+
+## Pull request review loop
+
+Codex reviews pull requests here automatically. It starts when a draft is
+marked ready for review, or on an `@codex review` comment, and says where
+it is with reactions on the PR itself:
+
+- 👀 — review running. Nothing to do but wait.
+- 👍 — review finished and found nothing.
+- Findings arrive as review comments instead.
+
+After pushing a fix for a review comment, do all three, in this order:
+reply on the thread explaining the fix, mark that thread resolved, then
+post a separate `@codex review` comment asking for a re-review. Do not
+use `@codex review` to trigger the *first* review — marking a draft ready
+does that, and when a PR stops being a draft is the owner's call, never
+Claude's.
+
+A 👍 on the PR is approval to merge it, whether it came from Codex having
+no findings or from the owner. Merge with a merge commit, matching the
+existing history.
+
+Reactions are not delivered over webhooks the way comments and checks are,
+so a 👍 is only noticed by looking for it — poll rather than wait for a
+notification that never comes.
