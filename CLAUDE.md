@@ -152,25 +152,47 @@ needs no token — and every one of these lists pages, so walk them:
     [ -n "$head" ] || { echo "github api: no head sha" >&2; exit 1; }
 
     # is there a 👍 from the bot?
-    jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at' <<<"$plus1"
+    plus=$(jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at' <<<"$plus1")
 
     # what was the newest verdict, on which revision?
-    echo "$head"
-    { jq -c '. + {verdict:"clean"}'    <<<"$comments"
-      jq -c '. + {verdict:"findings"}' <<<"$reviews"; } |
+    newest=$( { jq -c '. + {verdict:"clean"}'    <<<"$comments"
+                jq -c '. + {verdict:"findings"}' <<<"$reviews"; } |
       jq -r 'select(.user.login=="chatgpt-codex-connector[bot]")
            | (.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) as $s
            | select($s != null)
-           | [(.submitted_at // .created_at), .verdict, $s] | @tsv' | sort | tail -1
+           | [(.submitted_at // .created_at), .verdict, $s] | @tsv' | sort | tail -1)
+    IFS=$'\t' read -r _ kind sha <<<"$newest"
 
-    # and when it all passes, merge the revision that was checked - not
-    # whatever is at the tip by the time this runs
+    # Every check above only *prints* until something branches on it. Each
+    # of these is one of the three gates, and each exits rather than
+    # falling through to the merge.
+    [ -n "$plus" ]      || { echo "no: no 👍 from the bot"           >&2; exit 1; }
+    [ -n "$sha" ]       || { echo "no: no verdict names a revision"  >&2; exit 1; }
+    [ "$kind" = clean ] || { echo "no: newest verdict is $kind"      >&2; exit 1; }
+    case "$head" in "$sha"*) ;;
+      *) echo "no: verdict names $sha, head is $head" >&2; exit 1 ;;
+    esac
+
+    # only now, and only for the revision that was checked
     curl -sS -X PUT "https://api.github.com/$repo/pulls/$n/merge" \
       -H "Authorization: Bearer $GITHUB_TOKEN" \
       -d "$(jq -n --arg sha "$head" '{sha: $sha, merge_method: "merge"}')"
 
 The verdict line has to read `clean` and name the head sha, and the
-merge does not run until it does. The `verdict`
+merge does not run until it does — which is what those four `exit`s are
+for. A lookup that only prints decides nothing; read as a script, an
+absent 👍 or a findings verdict would scroll past and the merge would go
+ahead anyway. The `sha` precondition does not cover this: it asks
+whether the head moved, never whether it was approved.
+
+`[ -n "$sha" ]` is there because an empty `$sha` makes `case "$head" in
+"$sha"*)` match anything — the revision gate would pass whatever the head
+was. Nothing reaches it today: the jq filter drops entries with no
+`Reviewed commit`, and a verdict that is missing entirely fails the
+`clean` test first. It costs one line and covers the case where those
+stop being true.
+
+The `verdict`
 tag is stamped on from the list each entry came out of, because it is
 nowhere in the entry itself; entries with no `Reviewed commit` line are
 dropped so a stray bot comment cannot win the sort.
