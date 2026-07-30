@@ -12,7 +12,7 @@ module ::MItamae
         # portable equivalent.
         IMPORT_OPTIONS = ['--import-options', 'import-minimal'].freeze
 
-        # --receive-keys takes its import options from --keyserver-options,
+        # --recv-keys takes its import options from --keyserver-options,
         # not from --import-options (see gpg(1) on keyserver-options:
         # "Valid import-options or export-options may be used here as well").
         KEYSERVER_IMPORT_OPTIONS = ['--keyserver-options', 'import-minimal'].freeze
@@ -33,6 +33,12 @@ module ::MItamae
         # only when the option is given twice, leaving the sub key check
         # with nothing to match.
         LIST_OPTIONS = ['--fixed-list-mode', '--fingerprint', '--fingerprint'].freeze
+
+        # Oldest GnuPG this resource works with: import-minimal and
+        # export-minimal, which every fetch depends on, arrived in 1.4.3.
+        # Listings are already normalized across the whole range by
+        # LIST_OPTIONS, so this is the only version that has to be named.
+        MINIMUM_GPG_VERSION = '1.4.3'.freeze
 
         # Public keyservers fail intermittently, so network fetches are
         # retried with exponential backoff before the run gives up.
@@ -58,6 +64,40 @@ module ::MItamae
             attempt += 1
             interval *= 2
           end
+        end
+
+        # Compares dotted version strings numerically, so that 1.4.23 is
+        # newer than 1.4.3 (a plain string compare gets that wrong).
+        def version_at_least?(actual, minimum)
+          actual_parts = actual.split('.').map {|part| part.to_i }
+          minimum_parts = minimum.split('.').map {|part| part.to_i }
+          minimum_parts.length.times do |i|
+            current = actual_parts[i] ? actual_parts[i] : 0
+            required = minimum_parts[i]
+            return true if current > required
+            return false if current < required
+          end
+          true
+        end
+
+        # Checked up front so an ancient gpg is named as such, instead of
+        # failing later as an unknown-option error from inside a fetch.
+        def verify_gpg_version
+          result = run_command(['gpg', '--version'], error: false)
+          version = result.exit_status == 0 ? result.stdout.lines.first.to_s[/\d+\.\d+(\.\d+)?/] : nil
+
+          if version.nil?
+            # Repackaged and wrapped builds print their own banners.
+            # Refusing to run on an unreadable version would be worse than
+            # letting the actual gpg invocations speak for themselves.
+            MItamae.logger.debug 'could not read the gpg version, skipping the minimum version check'
+            return
+          end
+
+          MItamae.logger.debug "gpg version: #{version}"
+          return if version_at_least?(version, MINIMUM_GPG_VERSION)
+
+          raise "`gpg` is #{version}, but mitamae's gpg_keyring needs GnuPG #{MINIMUM_GPG_VERSION} or newer (--import-options import-minimal)."
         end
 
         def gpg(homedir, args)
@@ -153,6 +193,8 @@ module ::MItamae
           if run_command(['which', 'curl'], error: false).exit_status != 0
             raise "`curl` command is not available. Please install curl to use mitamae's gpg_keyring."
           end
+
+          verify_gpg_version
 
           super
         end
@@ -270,8 +312,10 @@ module ::MItamae
                   f.write("keyserver #{desired.keyserver}")
                 end
 
+                # --recv-keys, not its --receive-keys alias: GnuPG 1.4
+                # only knows the short spelling, 2.x knows both.
                 result = with_retry("gpg receive key: keyserver: #{desired.keyserver}") {
-                  run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--receive-keys', desired.fingerprint]), error: false)
+                  run_command(gpg(homedir, KEYSERVER_IMPORT_OPTIONS + ['--recv-keys', desired.fingerprint]), error: false)
                 }
                 if result.exit_status != 0
                   raise MItamae::Backend::CommandExecutionError, "gpg receive key: keyserver: #{desired.keyserver} fingerprint: #{desired.fingerprint}"
