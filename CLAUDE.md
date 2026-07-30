@@ -104,32 +104,47 @@ merge commit, matching the existing history.
 Reactions never arrive over webhooks the way comments and checks do, so a
 👍 is only seen by looking for it. Polling the PR is not enough either:
 neither the PR payload nor `issue_read` says who reacted, only how many
-did. Read the authors from the reactions API — this repository is public,
-so it needs no token:
-
-    curl -sS "https://api.github.com/repos/takumin/mitamae-plugin-resource-gpg_keyring/issues/<number>/reactions?content=%2B1&per_page=100"
-
-The query string is not decoration. That endpoint returns 30 reactions
-per page by default, so on a busy PR a 👍 can sit past the first page and
-read as no 👍 at all — which fails in the direction of waiting forever.
-Drop the `content` filter to see every reaction instead of only 👍.
-
-The revision that 👍 was left for is whatever Codex last reported as
-`Reviewed commit`. It writes that line into an issue comment when the
-review is clean and into the review body when it has findings, so both
-lists are read and the newest entry wins:
+did. All of it comes from the REST API — this repository is public, so it
+needs no token — and every one of these lists pages, so walk them:
 
     repo=repos/takumin/mitamae-plugin-resource-gpg_keyring
     n=<number>
+
+    paged() {  # paged <path> [extra-query] -> one JSON object per line
+      p=1
+      while :; do
+        out=$(curl -sS "https://api.github.com/$1?per_page=100&page=$p&$2")
+        [ "$(jq 'length' <<<"$out")" -eq 0 ] && break
+        jq -c '.[]' <<<"$out"
+        p=$((p + 1))
+      done
+    }
+
+    # is there a 👍 from the bot?
+    paged "$repo/issues/$n/reactions" "content=%2B1" |
+      jq -r 'select(.user.login=="chatgpt-codex-connector[bot]") | .created_at'
+
+    # which revision did it last review?
     curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r .head.sha
-    { curl -sS "https://api.github.com/$repo/issues/$n/comments?per_page=100"
-      curl -sS "https://api.github.com/$repo/pulls/$n/reviews?per_page=100"; } |
-      jq -r '.[] | select(.user.login=="chatgpt-codex-connector[bot]")
+    { paged "$repo/issues/$n/comments"; paged "$repo/pulls/$n/reviews"; } |
+      jq -r 'select(.user.login=="chatgpt-codex-connector[bot]")
            | [(.submitted_at // .created_at),
               ((.body | capture("Reviewed commit:\\*\\* `(?<s>[0-9a-f]+)`")? | .s) // empty)]
            | @tsv' | sort | tail -1
 
-The sha is abbreviated, so compare it as a prefix of the head sha.
+Both lookups are read the same way and for the same reason: 30 reactions
+per page by default, 100 comments or reviews per page at most, and taking
+only the first page of either loses the newest entry on a long-running
+PR. The reaction lookup then reads as no 👍, and the revision lookup
+names a stale sha — both of which stall the loop rather than break it,
+which is the failure that never announces itself. `content=%2B1` asks for
+👍 alone; drop it to see every reaction. `%2B` rather than `+`, which
+would decode as a space.
+
+Codex writes `Reviewed commit` into an issue comment when the review is
+clean and into the review body when it has findings, so both lists are
+read and the newest entry across them wins. The sha is abbreviated, so
+compare it as a prefix of the head sha.
 
 Do not reach for timestamps here. Comparing the 👍 against the head
 commit's `committer.date` looks equivalent and is not: that date is when
@@ -143,3 +158,8 @@ moment.
 `pulls/<number>/reviews` alone would be tidier, since its entries carry a
 `commit_id` field, but a clean verdict never creates a review object —
 which is exactly the case that ends in a merge.
+
+Where `gh` is installed, `gh api --paginate` walks these lists for you
+and `--jq` filters them, which is worth using interactively. The shell
+above is what the doc records because a fresh container has `curl` and
+`jq` and not `gh`.
