@@ -37,16 +37,16 @@ test gems nor mitamae:
 ## CLI tooling (aqua)
 
 `aqua.yaml` pins the CLI tools the pipeline shells out to (actionlint,
-shellcheck) with `aqua-checksums.json` covering linux and darwin on both
-architectures, and `checksum.require_checksum` on, so an unrecorded
-artifact is a hard failure rather than a warning. `rake tool` installs
-them; `rake lint` depends on it.
+zizmor, pinact, shellcheck) with `aqua-checksums.json` covering linux and
+darwin on both architectures, and `checksum.require_checksum` on, so an
+unrecorded artifact is a hard failure rather than a warning. `rake tool`
+installs them; `rake lint` depends on it.
 
 - Bumping a tool: change the version in `aqua.yaml`, run
-  `bundle exec rake checksum`, commit both files. Renovate raises the
-  version but cannot compute the hashes, so on a bot PR the
-  `autofix.ci` workflow runs that same task and pushes the result; the
-  manual command is only for local bumps.
+  `bundle exec rake checksum` (or `rake fix`), commit both files.
+  Renovate raises the version but cannot compute the hashes, so on a bot
+  PR the `autofix.ci` workflow runs it instead; the manual command is
+  only for local bumps.
 - aqua itself is bootstrapped outside the task runner (a tool manager
   cannot install itself); CI uses the `aquaproj/aqua-installer` action
   with `enable_aqua_install: 'false'` so that installing the *tools* stays
@@ -58,10 +58,11 @@ them; `rake lint` depends on it.
   checksum verified). Move it into `aqua.yaml` once the registry supports
   v2 — and drop one of the two pins when you do.
 - Some sandboxes (the Claude Code web container among them) block
-  `api.github.com` and sigstore, which makes aqua's GitHub Artifact
-  Attestations check fail for actionlint. That is the sandbox, not the
-  config; `AQUA_DISABLE_GITHUB_ARTIFACT_ATTESTATION=true` gets you a local
-  run, and CI verifies for real.
+  `api.github.com` and sigstore, so aqua's signature checks fail there —
+  the sandbox, not the config. `AQUA_DISABLE_GITHUB_ARTIFACT_ATTESTATION`,
+  `AQUA_DISABLE_SLSA` and `AQUA_DISABLE_COSIGN` set to `true` get you a
+  local run; the hashes in `aqua-checksums.json` are unaffected by them,
+  and CI verifies the signatures for real.
 
 ## Testing
 
@@ -69,11 +70,18 @@ them; `rake lint` depends on it.
   to what CI runs. Keep it green.
 - `bundle exec rake test` — the whole suite, fully offline. This is the
   default gate; keep it green.
-- `bundle exec rake lint` — actionlint over `.github/workflows/`. It
-  depends on `rake tool`, so the pinned actionlint is installed first.
-  actionlint delegates `run:` blocks to shellcheck, which is pinned
-  alongside it: the findings are the same everywhere instead of tracking
-  whatever shellcheck a runner image happens to ship.
+- `bundle exec rake lint` — three passes over `.github/workflows/`:
+  actionlint (does it parse; it delegates `run:` blocks to the pinned
+  shellcheck rather than a runner image's), zizmor (is it safe) and
+  pinact (is every action pinned to a SHA). All three run even when one
+  fails, so a finding never hides the next; `rake lint:zizmor` narrows to
+  one. zizmor runs `--offline` on purpose — its online audits resolve
+  refs through the GitHub API, which would make findings depend on
+  whether the caller holds a token, and the pinning they add is what
+  pinact answers anyway.
+- `bundle exec rake fix` — the write side of the above: regenerates
+  `aqua-checksums.json` (`rake checksum`) and pins any action still on a
+  tag (`rake pin`). This is what the `autofix.ci` workflow runs.
 - `bundle exec rake tool` — `aqua install` for the tools in `aqua.yaml`.
   Idempotent, so it is cheap to depend on.
 - The url/keyserver examples run against a local fixture server on
@@ -113,10 +121,10 @@ not in a `run:` block.
 - Permissions start at `{}` and are granted per job, actions are pinned
   to full commit SHAs with a version comment, checkouts do not persist
   credentials, and every job has a timeout.
-- `.github/workflows/autofix.yml` regenerates what a bot cannot: it runs
-  `rake checksum` on every pull request and hands the diff to the
-  autofix.ci app, which pushes the fix. Two things about it are load
-  bearing. Its `name:` must be exactly `autofix.ci` or the action
+- `.github/workflows/autofix.yml` regenerates what a bot leaves
+  unfinished: it runs `rake fix` on every pull request and hands the diff
+  to the autofix.ci app, which pushes the result. Two things about it are
+  load bearing. Its `name:` must be exactly `autofix.ci` or the action
   refuses to run, and the job stays `contents: read` — the app owns the
   write side, which is also why its commit re-triggers CI where a
   `GITHUB_TOKEN` push would not. The app has to be installed on the

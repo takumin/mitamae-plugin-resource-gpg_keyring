@@ -41,6 +41,46 @@
       "algorithm": "sha256"
     },
     {
+      "id": "github_release/github.com/suzuki-shunsuke/pinact/v4.1.1/pinact_darwin_amd64.tar.gz",
+      "checksum": "513678FDB0BB59B2742DD06D28F0EE851496A83BA939954009AA6BE53F5AEC9C",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/suzuki-shunsuke/pinact/v4.1.1/pinact_darwin_arm64.tar.gz",
+      "checksum": "C13998C9F0DD09D8973700938AA5F6AC52A1DB4E94D4F578D8CC976CDA478614",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/suzuki-shunsuke/pinact/v4.1.1/pinact_linux_amd64.tar.gz",
+      "checksum": "D1CFFEBE5704B74E2E5F8A864EFB9F7E54768972DC686188C008033FB1797841",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/suzuki-shunsuke/pinact/v4.1.1/pinact_linux_arm64.tar.gz",
+      "checksum": "DD1F29908319ED3E59F9FE6B39196EFBB76936357F3BD741CD759A96306AE8D8",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-aarch64-apple-darwin.tar.gz",
+      "checksum": "54949BBD6B4C8527046BB8990BAC9E0DAB3EEC787640F4E6199AE121DD1040BE",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-aarch64-unknown-linux-gnu.tar.gz",
+      "checksum": "324E43770CFACF4216F8AEFB287263B5B5C733C85B03BF7583B5CC4A0460239E",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-apple-darwin.tar.gz",
+      "checksum": "40A58D8560D65C71357B3977D0DA425773BF8F10BF1FFD38099D963D3AFDF3AA",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/zizmorcore/zizmor/v1.28.0/zizmor-x86_64-unknown-linux-gnu.tar.gz",
+      "checksum": "E87B67160194884E375A46A12C57CCC904F762B53845F254FAB7F17D98809C09",
+      "algorithm": "sha256"
+    },
+    {
       "id": "registries/github_content/github.com/aquaproj/aqua-registry/v4.545.0/registry.yaml",
       "checksum": "6E24934C8017EE09F33FDAC422168AF4329C9BFAA6AFD388A363FB2526B5F40D",
       "algorithm": "sha256"

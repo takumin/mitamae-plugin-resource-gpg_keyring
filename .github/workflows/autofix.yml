@@ -47,13 +47,14 @@ jobs:
       - name: Install gems
         run: bundle install
 
-      # Renovate raises the versions in aqua.yaml but cannot compute the
-      # hashes that go with them, which require_checksum turns into a hard
-      # failure in the lint job. This is the other half of such a PR.
-      - name: Regenerate aqua-checksums.json
+      # Both halves of what a bot leaves unfinished: Renovate raises the
+      # versions in aqua.yaml without the hashes that go with them, and an
+      # action added by tag is not pinned yet. The lint job rejects either,
+      # so regenerate them here rather than sending someone to a terminal.
+      - name: Regenerate the derived files
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: bundle exec rake checksum
+        run: bundle exec rake fix
 
       - name: Push the fix
         uses: autofix-ci/action@c5b2d67aa2274e7b5a18224e8171550871fc7e4a # v1.3.4

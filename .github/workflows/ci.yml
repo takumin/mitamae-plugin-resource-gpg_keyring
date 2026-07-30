@@ -57,6 +57,10 @@ jobs:
         run: bundle exec rake tool
 
       - name: Lint
+        env:
+          # pinact resolves an action's ref through the GitHub API when it
+          # finds one that is not already pinned.
+          GITHUB_TOKEN: ${{ github.token }}
         run: bundle exec rake lint
 
   test:

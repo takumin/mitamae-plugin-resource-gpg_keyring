@@ -21,8 +21,11 @@ registries:
     ref: v4.545.0
 
 packages:
-  # Lints .github/workflows/ (see rakelib/lint.rake).
+  # The three angles `rake lint` looks at .github/workflows/ from: does
+  # it parse, is it safe, are its actions pinned.
   - name: rhysd/actionlint@v1.7.12
+  - name: zizmorcore/zizmor@v1.28.0
+  - name: suzuki-shunsuke/pinact@v4.1.1
   # actionlint shells out to shellcheck for `run:` blocks when it is on
   # PATH. Pinning it keeps the findings identical everywhere, instead of
   # depending on whatever version a runner image happens to ship.
