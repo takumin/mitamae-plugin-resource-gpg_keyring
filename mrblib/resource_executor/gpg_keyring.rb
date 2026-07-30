@@ -17,6 +17,23 @@ module ::MItamae
         # "Valid import-options or export-options may be used here as well").
         KEYSERVER_IMPORT_OPTIONS = ['--keyserver-options', 'import-minimal'].freeze
 
+        # Options for every key listing, shaped by what GnuPG versions
+        # older than 2.1.15 need. Both are no-ops on newer ones, so the
+        # listing is identical everywhere and only has to be parsed once.
+        #
+        # --fixed-list-mode keeps the primary uid in a uid record of its
+        # own. Without it GnuPG 1.4 inlines that uid into the pub record
+        # and emits no uid record for it at all, which reads here as a key
+        # with no valid uid and breaks the user_id assertion. GnuPG 2.x is
+        # always in fixed list mode; the option exists since 1.0.5.
+        #
+        # --fingerprint repeated adds the fpr records for sub keys. From
+        # 2.1.15 on they are unconditional ("gpg: Always print fingerprint
+        # records in --with-colons mode"); before that they are printed
+        # only when the option is given twice, leaving the sub key check
+        # with nothing to match.
+        LIST_OPTIONS = ['--fixed-list-mode', '--fingerprint', '--fingerprint'].freeze
+
         # Public keyservers fail intermittently, so network fetches are
         # retried with exponential backoff before the run gives up.
         RETRY_LIMIT = 3
@@ -173,7 +190,7 @@ module ::MItamae
               raise MItamae::Backend::CommandExecutionError, "gpg import key: #{attributes.path}"
             end
 
-            result = run_command(gpg(homedir, ['--fingerprint']), error: false)
+            result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
             if result.exit_status != 0
               raise MItamae::Backend::CommandExecutionError, "gpg show fingerprint"
             end
@@ -261,7 +278,7 @@ module ::MItamae
                 end
               end
 
-              result = run_command(gpg(homedir, ['--fingerprint']), error: false)
+              result = run_command(gpg(homedir, LIST_OPTIONS), error: false)
               if result.exit_status != 0
                 raise MItamae::Backend::CommandExecutionError, 'gpg list fetched keys'
               end
