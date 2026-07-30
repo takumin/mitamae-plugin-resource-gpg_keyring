@@ -169,14 +169,23 @@ needs no token — and every one of these lists pages, so walk them:
     [ -n "$plus" ]      || { echo "no: no 👍 from the bot"           >&2; exit 1; }
     [ -n "$sha" ]       || { echo "no: no verdict names a revision"  >&2; exit 1; }
     [ "$kind" = clean ] || { echo "no: newest verdict is $kind"      >&2; exit 1; }
-    case "$head" in "$sha"*) ;;
-      *) echo "no: verdict names $sha, head is $head" >&2; exit 1 ;;
-    esac
 
-    # only now, and only for the revision that was checked
-    curl -sS -X PUT "https://api.github.com/$repo/pulls/$n/merge" \
+    # The verdict names an abbreviated revision. Resolve it and require it
+    # to *be* the head: asking whether the head merely starts with those
+    # characters is a weaker question, and a different commit can answer
+    # it. GitHub 422s on an abbreviation it cannot resolve, which `// empty`
+    # turns into a mismatch rather than a pass.
+    reviewed=$(curl -sS "https://api.github.com/$repo/commits/$sha" | jq -r '.sha // empty')
+    [ "$reviewed" = "$head" ] ||
+      { echo "no: verdict names ${reviewed:-$sha}, head is $head" >&2; exit 1; }
+
+    # only now, and only for the revision that was checked. --fail-with-body
+    # because curl exits 0 on a 409/403 otherwise, and "nothing merged"
+    # would read as success.
+    curl -sS --fail-with-body -X PUT "https://api.github.com/$repo/pulls/$n/merge" \
       -H "Authorization: Bearer $GITHUB_TOKEN" \
-      -d "$(jq -n --arg sha "$head" '{sha: $sha, merge_method: "merge"}')"
+      -d "$(jq -n --arg sha "$head" '{sha: $sha, merge_method: "merge"}')" ||
+      { echo "merge refused" >&2; exit 1; }
 
 The verdict line has to read `clean` and name the head sha, and the
 merge does not run until it does — which is what those four `exit`s are
@@ -185,12 +194,21 @@ absent 👍 or a findings verdict would scroll past and the merge would go
 ahead anyway. The `sha` precondition does not cover this: it asks
 whether the head moved, never whether it was approved.
 
-`[ -n "$sha" ]` is there because an empty `$sha` makes `case "$head" in
-"$sha"*)` match anything — the revision gate would pass whatever the head
-was. Nothing reaches it today: the jq filter drops entries with no
-`Reviewed commit`, and a verdict that is missing entirely fails the
-`clean` test first. It costs one line and covers the case where those
+`[ -n "$sha" ]` is there because an empty `$sha` would otherwise be sent
+to the commits endpoint as a bare path, and because an empty string is
+the one value that makes a prefix test match anything — the shape this
+check used to have. Nothing reaches it today: the jq filter drops entries
+with no `Reviewed commit`, and a verdict that is missing entirely fails
+the `clean` test first. It costs one line and covers the case where those
 stop being true.
+
+The abbreviation is why the revision gate resolves rather than compares
+prefixes. Codex writes 10 hex characters — 40 bits, which is not a wall —
+and "the head starts with these characters" is a different, weaker
+question than "this is the head". Resolving turns it back into the
+question worth asking, for one request. GitHub needs at least 7
+characters and answers 422 for anything it cannot resolve, so a garbage
+or truncated sha fails the gate instead of skipping it.
 
 The `verdict`
 tag is stamped on from the list each entry came out of, because it is
