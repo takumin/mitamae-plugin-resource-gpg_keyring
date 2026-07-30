@@ -195,12 +195,11 @@ ahead anyway. The `sha` precondition does not cover this: it asks
 whether the head moved, never whether it was approved.
 
 `[ -n "$sha" ]` is there because an empty `$sha` would otherwise be sent
-to the commits endpoint as a bare path, and because an empty string is
-the one value that makes a prefix test match anything — the shape this
-check used to have. Nothing reaches it today: the jq filter drops entries
-with no `Reviewed commit`, and a verdict that is missing entirely fails
-the `clean` test first. It costs one line and covers the case where those
-stop being true.
+to the commits endpoint as a bare path, whose answer is not a commit and
+not a refusal to resolve one. Nothing reaches it today: the jq filter
+drops entries with no `Reviewed commit`, and a verdict that is missing
+entirely fails the `clean` test first. It costs one line and covers the
+case where those stop being true.
 
 The abbreviation is why the revision gate resolves rather than compares
 prefixes. Codex writes 10 hex characters — 40 bits, which is not a wall —
@@ -235,8 +234,9 @@ would decode as a space.
 That split — `Reviewed commit` in an issue comment when the review is
 clean, in the review body when it has findings — is why both lists are
 read, and it is also the only thing that says which kind of verdict an
-entry is. The sha is abbreviated, so compare it as a prefix of the head
-sha.
+entry is. The sha it carries is abbreviated, so resolve it through the
+commits endpoint and require the full result to equal the head — never
+compare it as a prefix of the head.
 
 Do not reach for timestamps here. Comparing the 👍 against the head
 commit's `committer.date` looks equivalent and is not: that date is when
