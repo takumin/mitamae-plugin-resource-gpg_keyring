@@ -126,6 +126,21 @@ FIXTURES = {
     key
   end,
 
+  # Two keys in one keyring file; the first one is the "desired" key.
+  'multi-key.asc' => lambda do |gpg, path|
+    first = gpg.generate_key('First Key <first@example.com>')
+    second = gpg.generate_key('Second Key <second@example.com>')
+    gpg.export([first, second], to: path)
+    first
+  end,
+
+  # A key with an encryption subkey, for sub-fingerprint handling.
+  'with-subkey.asc' => lambda do |gpg, path|
+    key = gpg.generate_key('Subbed Key <subbed@example.com>')
+    gpg.add_key(key)
+    gpg.export(key, to: path)
+    "#{key} (sub: #{gpg.sub_fingerprint_of('subbed@example.com')})"
+  end,
 }
 
 namespace :fixtures do

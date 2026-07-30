@@ -89,6 +89,17 @@ module ::MItamae
           records
         end
 
+        # A fingerprint that matches a sub key is a recipe mistake worth its
+        # own message: treated as a plain mismatch it would trigger an
+        # endless re-fetch loop (the fetch finds the key, the export writes
+        # the primary fingerprint, the next run mismatches again).
+        def raise_if_sub_key_fingerprint(records, source)
+          sub_owner = records.detect {|r| r[:sub_fingerprints].include?(desired.fingerprint) }
+          if sub_owner
+            raise "fingerprint #{desired.fingerprint} is a sub key of #{sub_owner[:fingerprint]}; specify the primary key fingerprint (#{source})"
+          end
+        end
+
         # user_id is an assertion, not a convergible attribute: a keyring
         # cannot be "fixed" into carrying the requested uid, so a mismatch
         # stops the run instead of updating the file. The match is an exact
@@ -157,29 +168,45 @@ module ::MItamae
           }
 
           records = parse_colons(lines)
-
-          # TODO: multiple pub/sub keys
-          if records.length == 1
-            current.fingerprint = records[0][:fingerprint]
-          else
-            raise 'multiple pub keys'
+          if records.empty?
+            raise "no key could be read from #{attributes.path} (gpg cannot import a key that has no user id packet at all)"
           end
-          MItamae.logger.debug "fingerprint: #{current.fingerprint}"
 
-          if current.fingerprint == desired.fingerprint
-            verify_user_id(records[0][:uids], attributes.path)
+          record = records.detect {|r| r[:fingerprint] == desired.fingerprint }
+          if record
+            others = records.map {|r| r[:fingerprint] } - [record[:fingerprint]]
+            unless others.empty?
+              # Reads tolerate foreign keys in the file; writes never touch
+              # such a file (see the guard below), so their presence is
+              # only surfaced for diagnosis.
+              MItamae.logger.debug "keyring also contains other keys: #{others.inspect}"
+            end
+            current.fingerprint = record[:fingerprint]
+            verify_user_id(record[:uids], attributes.path)
             # Verification proved the exact match, so mirroring the desired
             # string keeps the comparison type-safe: an Array here against
             # the desired String would report a change on every run. Without
             # user_id the comparison is skipped (the desired side is nil)
             # and the full valid uid set is the honest current state.
-            current.user_id = desired.user_id ? desired.user_id : records[0][:uids]
+            current.user_id = desired.user_id ? desired.user_id : record[:uids]
           else
-            # A key with a different fingerprint is about to be replaced;
-            # the replacement is verified after the fetch (pre_action), so
-            # asserting against the doomed key would only break rotation.
+            raise_if_sub_key_fingerprint(records, attributes.path)
+
+            if records.length > 1
+              # A fingerprint mismatch triggers a re-fetch that rewrites the
+              # whole file, which would silently drop every other key kept
+              # in it. This resource only ever writes single-key files.
+              raise "#{attributes.path} contains multiple keys #{records.map {|r| r[:fingerprint] }.inspect} and none is #{desired.fingerprint}; refusing to rewrite the file"
+            end
+
+            # Single foreign key: adopt it as the current state so the
+            # fingerprint mismatch triggers the usual re-fetch and
+            # replacement. It is about to be replaced, so the user_id
+            # assertion runs against the fetched key (pre_action) instead.
+            current.fingerprint = records[0][:fingerprint]
             current.user_id = records[0][:uids].last
           end
+          MItamae.logger.debug "fingerprint: #{current.fingerprint}"
         end
 
         def content_file
@@ -229,6 +256,7 @@ module ::MItamae
               source = desired.url ? desired.url : desired.keyserver
               record = records.detect {|r| r[:fingerprint] == desired.fingerprint }
               if record.nil?
+                raise_if_sub_key_fingerprint(records, source)
                 raise "gpg fetched key does not contain fingerprint #{desired.fingerprint}: got #{records.map {|r| r[:fingerprint] }.inspect} (#{source})"
               end
               verify_user_id(record[:uids], source)
