@@ -1,0 +1,107 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Deny by default; every job grants only what it needs.
+permissions: {}
+
+# Supersede in-flight PR runs, never cancel a run on main.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Install strictly from Gemfile.lock; fail instead of silently relocking.
+  BUNDLE_FROZEN: 'true'
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: '3.4'
+
+      # Only puts aqua on PATH; `rake tool` is what installs the pinned
+      # CLI tools, so CI and a laptop go through the same code path.
+      - name: Set up aqua
+        uses: aquaproj/aqua-installer@96a9bc20066c5bf5e275b41019cfc165b25f4e2e # v4.0.5
+        with:
+          aqua_version: v2.62.2
+          enable_aqua_install: 'false'
+
+      - name: Install gems
+        run: bundle install
+
+      - name: Install tools
+        env:
+          # aqua verifies the GitHub Artifact Attestations the registry
+          # declares, which means API calls; the run's own token keeps
+          # that off the anonymous rate limit.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bundle exec rake tool
+
+      - name: Lint
+        run: bundle exec rake lint
+
+  test:
+    name: Test (ruby ${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Bundler 4 (see Gemfile.lock) requires Ruby >= 3.2.
+        ruby: ['3.2', '3.3', '3.4', '4.0']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: ${{ matrix.ruby }}
+
+      - name: Install gems
+        run: bundle install
+
+      # gpg and curl are what the resource shells out to; the suite fetches
+      # the pinned mitamae binary itself. The runner image ships both.
+      - name: Show tool versions
+        run: |
+          gpg --version | head -1
+          curl --version | head -1
+
+      - name: Test
+        run: bundle exec rake test
+
+  # The single status check to require in branch protection.
+  ci:
+    name: CI
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    if: ${{ failure() || cancelled() }}
+    steps:
+      - name: Failure status
+        run: exit 1
