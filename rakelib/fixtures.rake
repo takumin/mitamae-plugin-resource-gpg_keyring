@@ -141,6 +141,14 @@ FIXTURES = {
     gpg.export(key, to: path)
     "#{key} (sub: #{gpg.sub_fingerprint_of('subbed@example.com')})"
   end,
+
+  # A key whose uid contains a colon, which gpg escapes as \x3a in
+  # colon-format listings.
+  'colon-uid.asc' => lambda do |gpg, path|
+    key = gpg.generate_key('Colon: User <colon@example.com>')
+    gpg.export(key, to: path)
+    key
+  end,
 }
 
 namespace :fixtures do

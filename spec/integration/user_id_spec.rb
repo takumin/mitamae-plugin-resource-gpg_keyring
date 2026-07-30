@@ -9,6 +9,20 @@ RSpec.describe 'user_id assertion' do
     expect(uid_lines.first).to start_with('uid:r:')
   end
 
+  it 'matches a uid that gpg escapes in colon-format listings' do
+    keyring = temporary('colon-uid.gpg.asc')
+    FileUtils.cp(fixture('colon-uid.asc'), keyring)
+
+    # The colon in the uid must actually be escaped in the listing,
+    # otherwise this example proves nothing.
+    expect(gpg_show_keys(keyring)).to include('Colon\x3a User')
+
+    run = run_mitamae('colon_uid')
+    expect_mitamae_success(run)
+    expect(run.log).not_to include('will change from')
+    expect(File.binread(keyring)).to eq(File.binread(fixture('colon-uid.asc')))
+  end
+
   it 'stops when the placed keyring does not carry the asserted uid' do
     keyring = temporary('mismatch.gpg.asc')
     FileUtils.cp(fixture('valid-key.asc'), keyring)

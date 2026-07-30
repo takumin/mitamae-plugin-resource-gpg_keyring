@@ -53,6 +53,15 @@ module ::MItamae
           ].concat(args)
         end
 
+        # gpg escapes ':' and '\' (and control characters) in colon-format
+        # field values as C-style \xNN sequences (see gnupg doc/DETAILS).
+        # Without decoding, a uid like "Colon: User" is stored as
+        # "Colon\x3a User" and can never exact-match the natural string
+        # given in the user_id attribute.
+        def unescape_colons(value)
+          value.gsub(/\\x[0-9a-fA-F]{2}/) { |match| match[2, 2].to_i(16).chr }
+        end
+
         # Parses `gpg --with-colons` key listing lines into one record per
         # pub key: { fingerprint:, uids:, sub_fingerprints: }. uid and sub
         # entries belong to the pub record they follow.
@@ -83,7 +92,7 @@ module ::MItamae
               # A whitelist of "valid" states would break on placed files:
               # without a trustdb every live uid lists as '-' (unknown), so
               # only the states that mark a uid as dead are excluded.
-              record[:uids] << entry[9] if record && !%w[r e].include?(entry[1])
+              record[:uids] << unescape_colons(entry[9]) if record && !%w[r e].include?(entry[1])
             end
           end
           records
