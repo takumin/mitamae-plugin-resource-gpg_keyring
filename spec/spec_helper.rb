@@ -137,36 +137,44 @@ module GpgKeyringSpecHelper
     FileUtils.rm_rf(dir)
   end
 
-  # A gpgconf that answers --list-dirs sysconfdir with a directory of the
-  # example's choosing, handing every other call to the real binary. It
-  # is how GnuPG's system-wide common.conf is reached from a spec: the
-  # real one lives outside the repository, needs root to write, and would
-  # change every other gpg on the box for as long as an interrupted run
-  # left it there.
-  def with_gpgconf_sysconfdir(sysconfdir)
-    dir = File.join(BIN_DIR, 'gpgconf-stub')
+  # A gpg whose --gpgconf-list reports keyboxd as enabled, with every
+  # other call - including the listing and the export that follow - going
+  # to the real binary, which reads its own configuration as usual.
+  #
+  # It is how `use-keyboxd` set outside the homedir is reached from a
+  # spec. GnuPG resolves that option from the homedir's common.conf and a
+  # system-wide one whose location is compiled in; the second lives
+  # outside the repository, needs root to write, and would change every
+  # other gpg on the box for as long as an interrupted run left it there.
+  # What is left to pin here is that the backend comes from the gpg that
+  # is running rather than from a file this resource went looking for,
+  # and that is the answer this replaces.
+  def with_keyboxd_gpg
+    dir = File.join(BIN_DIR, 'keyboxd-gpg')
     FileUtils.mkdir_p(dir)
-    stub = File.join(dir, 'gpgconf')
+    stub = File.join(dir, 'gpg')
     File.write(stub, <<~SCRIPT)
       #!/bin/sh
-      if [ "$1" = "--list-dirs" ] && [ "$2" = "sysconfdir" ]; then
-        printf '%s\\n' '#{sysconfdir}'
-        exit 0
-      fi
-      exec #{which('gpgconf')} "$@"
+      for arg in "$@"; do
+        if [ "$arg" = "--gpgconf-list" ]; then
+          out=$(#{real_gpg} "$@") || exit $?
+          printf '%s\\n' "$out" | sed 's/^use_keyboxd:\\([^:]*\\):.*/use_keyboxd:\\1:1:/'
+          exit 0
+        fi
+      done
+      exec #{real_gpg} "$@"
     SCRIPT
     FileUtils.chmod(0o755, stub)
-    @gpgconf_stub_dir = dir
+    @gpg_stub_dir = dir
     yield
   ensure
-    @gpgconf_stub_dir = nil
+    @gpg_stub_dir = nil
     FileUtils.rm_rf(dir)
   end
 
   def mitamae_env
     dirs = []
     dirs << @gpg_stub_dir if @gpg_stub_dir
-    dirs << @gpgconf_stub_dir if @gpgconf_stub_dir
     dirs << legacy_shim_dir if legacy_gpg?
     return {} if dirs.empty?
 

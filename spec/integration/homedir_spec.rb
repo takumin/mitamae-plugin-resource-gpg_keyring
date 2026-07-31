@@ -434,14 +434,18 @@ RSpec.describe 'homedir' do
   # configuration, and the homedirs on it then carry no common.conf at all
   # while every key still lives in public-keys.d.
   #
-  # What this pins is the lookup that finds those keys. The export that
-  # follows is gpg's own business and cannot be arranged from here: gpg
-  # reads `use-keyboxd` from common.conf and nowhere else - on the command
-  # line it answers "Please move option to common.conf" and goes on using
-  # the keybox - and a common.conf in the homedir is the thing this case
-  # is defined by not having. That half was checked by hand against a real
-  # /etc/gnupg/common.conf, where the run places the key and fetches
-  # nothing.
+  # What this pins is the lookup that finds those keys, and that it takes
+  # the backend from the gpg it runs: the stub changes nothing but that
+  # binary's own report, and every gpg the run goes on to use is the real
+  # one reading its real configuration.
+  #
+  # The system file itself cannot be arranged from here - its location is
+  # compiled into GnuPG, and writing it needs root and would change every
+  # other gpg on the box - so the export that follows is left out of what
+  # this asserts: it reads the caller's homedir, where a real system file
+  # would say keyboxd and a stub says nothing. That half was checked by
+  # hand against a real /etc/gnupg/common.conf, where the run places the
+  # key and fetches nothing.
   it 'finds the key when keyboxd is enabled in GnuPG own configuration' do
     skip 'GnuPG 1.4 has no keyboxd' if legacy_gpg?
 
@@ -455,11 +459,7 @@ RSpec.describe 'homedir' do
     File.delete(File.join(gpg_homedir, 'common.conf'))
     expect(File.exist?(File.join(gpg_homedir, 'public-keys.d', 'pubring.db'))).to be(true)
 
-    sysconfdir = temporary('etc-gnupg')
-    FileUtils.mkdir_p(sysconfdir)
-    File.write(File.join(sysconfdir, 'common.conf'), "use-keyboxd\n")
-
-    run = with_gpgconf_sysconfdir(sysconfdir) { run_mitamae('homedir_offline') }
+    run = with_keyboxd_gpg { run_mitamae('homedir_offline') }
     expect_mitamae_success(run)
 
     # The recipe's keyserver is a port that refuses, so a fetch would end
@@ -468,20 +468,18 @@ RSpec.describe 'homedir' do
     expect(run.log).not_to include('--recv-keys')
   end
 
-  # The other side of that: `use-keyboxd` in GnuPG's own configuration says
-  # nothing about a gpg that has never heard of keyboxd, and a 1.4 with a
-  # newer gpgconf beside it - which is exactly what a legacy run here is -
-  # answers out of pubring.gpg whatever that file says.
+  # The other side of that: a common.conf saying `use-keyboxd` is a file a
+  # gpg that has never heard of keyboxd reads and ignores, and its keys are
+  # in pubring.gpg whatever that file says. A homedir carried over from a
+  # 2.x box is the shape this arrives in, and the answer has to come from
+  # the binary - which, having no such option, never reports one.
   it 'ignores keyboxd configuration the gpg in use cannot read' do
     skip 'needs a gpg without keyboxd' unless legacy_gpg?
 
     import_into_homedir(gpg_homedir, fixture('valid-key.asc'))
+    File.write(File.join(gpg_homedir, 'common.conf'), "use-keyboxd\n")
 
-    sysconfdir = temporary('etc-gnupg')
-    FileUtils.mkdir_p(sysconfdir)
-    File.write(File.join(sysconfdir, 'common.conf'), "use-keyboxd\n")
-
-    run = with_gpgconf_sysconfdir(sysconfdir) { run_mitamae('homedir_offline') }
+    run = run_mitamae('homedir_offline')
     expect_mitamae_success(run)
 
     expect(fingerprint_of(temporary('homedir-offline.gpg.asc'))).to eq(HOMEDIR_KEY_FINGERPRINT)

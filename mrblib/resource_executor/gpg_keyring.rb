@@ -40,12 +40,6 @@ module ::MItamae
         # LIST_OPTIONS, so this is the only version that has to be named.
         MINIMUM_GPG_VERSION = '1.4.3'.freeze
 
-        # Where keyboxd arrived, and with it the `use-keyboxd` that
-        # common.conf can carry. Older binaries read that file and ignore
-        # the option, keeping their keys where they always did, so what it
-        # says is only worth reading from here on.
-        MINIMUM_KEYBOXD_VERSION = '2.3'.freeze
-
         # Public key algorithms that need ECC support in gpg (RFC 6637
         # and RFC 8032 assignments). GnuPG carries none of them before
         # 2.1, which is what makes them worth naming: 1.4 rejects such a
@@ -762,56 +756,46 @@ module ::MItamae
           run_command(['gpg-connect-agent', '-S', socket, 'KILLKEYBOXD', '/bye'], error: false)
         end
 
-        # common.conf is read by every GnuPG component rather than by gpg's
-        # option parser, so --no-options does not turn `use-keyboxd` off:
-        # what it says goes, and this reads the same files to find out.
+        # Which store a homedir's keys are in is settled by `use-keyboxd`,
+        # and by two files that can set it: common.conf in the homedir and
+        # a system-wide one next to the rest of GnuPG's configuration. A
+        # box that has moved to keyboxd sets it once, in the system file,
+        # and the homedirs on it then carry no common.conf at all while
+        # every key still lives in public-keys.d. Both are read by GnuPG's
+        # libraries rather than by gpg's option parser, so --no-options
+        # does not turn any of it off.
         #
-        # Files, because there are two: the one in the homedir and a
-        # system-wide one next to the rest of GnuPG's configuration. A box
-        # that has moved to keyboxd sets it once, in the system file, and
-        # the homedirs on it then carry no common.conf at all while every
-        # key still lives in public-keys.d. Reading only the homedir's
-        # answers "no keys here" for those, which is the offline reuse
-        # this resource exists to do. Nothing spells `use-keyboxd` off
-        # again, so either file saying it settles the question.
+        # Rather than find those files and read them, the question goes to
+        # the binary that will answer out of them. `--gpgconf-list` prints
+        # the options gpgconf shows for the gpg that is running - it is
+        # how gpgconf itself asks - with `use_keyboxd` among them and its
+        # value already resolved from both files.
         #
-        # gpgconf is asked where the system file is rather than assuming
-        # /etc/gnupg, which is only where it usually ends up. On GnuPG 1.4
-        # there is neither gpgconf nor common.conf and both reads fail,
-        # which is the right answer there.
+        # That is the only spelling of this question that cannot end up
+        # describing a different installation. `gpgconf --list-dirs`
+        # answers for the gpgconf found on PATH, which in a split
+        # installation is not the GnuPG placing this keyring, and a
+        # version check on gpg only says the binary could read such a file
+        # - never that the file that was found is one it reads. Asking gpg
+        # binds the answer to the binary by construction.
+        #
+        # A gpg with no keyboxd prints no use_keyboxd line at all: 1.4
+        # prints a handful of unrelated options, and the versions before
+        # 2.3 stop short of this one. The missing line is the answer for
+        # those rather than a failure to get one, which is what the
+        # version check was there for. The command creates nothing in the
+        # homedir - not even the homedir - which is what makes it usable
+        # on a directory belonging to the caller.
         def keyboxd_homedir?(homedir)
-          return false unless gpg_knows_keyboxd?
-          return true if use_keyboxd?(File.join(homedir, 'common.conf'))
-
-          result = run_command(['gpgconf', '--list-dirs', 'sysconfdir'], error: false)
+          result = run_command(gpg(homedir, ['--gpgconf-list']), error: false)
           return false if result.exit_status != 0
 
-          use_keyboxd?(File.join(result.stdout.chomp, 'common.conf'))
-        end
-
-        def use_keyboxd?(path)
-          result = run_command(['cat', '--', path], error: false)
-          return false if result.exit_status != 0
-
-          result.stdout.lines.any? {|line| line.strip.split(' ')[0].eql?('use-keyboxd') }
-        end
-
-        # Whether the gpg in use has ever heard of keyboxd, which is what
-        # makes those files worth reading at all. Neither of them is the
-        # binary's: a homedir carrying a common.conf from a 2.x era, or a
-        # system file written for a 2.x installed beside it, says nothing
-        # about a 1.4 that answers out of pubring.gpg regardless - and a
-        # gpgconf from that neighbour is there to be found either way,
-        # which is the shape of this repository's own legacy runs.
-        #
-        # A version rather than a capability query, because the obvious
-        # query - `gpg --dump-options` - writes several hundred lines into
-        # the debug log of every run that names a homedir. An unreadable
-        # banner is not turned into a claim about the binary: the files
-        # get read, as they were before any of this.
-        def gpg_knows_keyboxd?
-          version = gpg_version
-          version.nil? or version_at_least?(version, MINIMUM_KEYBOXD_VERSION)
+          result.stdout.lines.any? {|line|
+            # `name:flags:value:`, and the value of a boolean option is the
+            # number of times it is set - anything but 0 is on.
+            fields = line.strip.split(':')
+            fields[0].eql?('use_keyboxd') and !fields[2].to_s.empty? and !fields[2].eql?('0')
+          }
         end
 
         # gpg escapes ':' and '\' (and control characters) in colon-format
