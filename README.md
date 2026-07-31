@@ -161,10 +161,18 @@ Network fetches (both `curl` and `--recv-keys`) are retried up to 3 times
 with exponential backoff (2s, then 4s), because public keyservers fail
 intermittently.
 
-Every gpg invocation is made with `--no-options`, `--batch`, `--quiet`,
-`--with-colons` and `--trust-model always`: no `gpg.conf` gets a say in what
-is written, nothing consults the web of trust, and no trustdb is built
-behind the caller's back.
+Every gpg invocation that reads or writes a keyring is made with
+`--homedir`, `--no-options`, `--batch`, `--quiet`, `--with-colons` and
+`--trust-model always`: no `gpg.conf` gets a say in what is written, nothing
+consults the web of trust, and no trustdb is built behind the caller's back.
+
+Two probes stand outside that rule, because neither of them touches a
+keyring: `gpg --version`, which reads the version and whether the build
+carries ECC at all, and `gpg --list-packets`, which names the algorithm of a
+key an import has already rejected. Both run against the default homedir
+rather than the run's, so `gpg.conf` is read for them, and `--list-packets`
+on a host that has no `~/.gnupg` yet leaves an empty one behind. No key is
+imported or exported either way.
 
 ### The homedir
 
