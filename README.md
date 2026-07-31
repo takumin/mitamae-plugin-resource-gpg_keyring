@@ -244,20 +244,32 @@ the one thing that is not wrong with the key.
 
 ```console
 $ bundle install
-$ bundle exec rake test
+$ bundle exec rake        # lint then test, identical to CI
 ```
 
-The suite drives the real `mitamae local` binary against the recipes in
-`test/recipe/` and runs fully offline: url and keyserver cases are served by
-a local fixture server started by the suite, and all keys are committed
-synthetic fixtures. mitamae is taken from `PATH` when present, otherwise a
-pinned release is downloaded into `.bin/` and checksum-verified; override
-with `MITAMAE=/path/to/binary`.
+`rake test` is the suite on its own and needs nothing but the gems. It
+drives the real `mitamae local` binary against the recipes in `test/recipe/`
+and runs fully offline: url and keyserver cases are served by a local
+fixture server started by the suite, and all keys are committed synthetic
+fixtures. mitamae is taken from `PATH` when present, otherwise a pinned
+release is downloaded into `.bin/` and checksum-verified; override with
+`MITAMAE=/path/to/binary`.
+
+`rake lint` checks `.github/workflows/` with actionlint, zizmor and pinact,
+pinned by [aqua](https://aquaproj.github.io/) in `aqua.yaml` and installed
+by `rake tool`, so it needs aqua on `PATH`. `rake fix` is its write side
+(aqua checksums, action SHA pins), and is what the autofix.ci workflow runs
+on pull requests.
 
 ```console
 $ bundle exec rspec spec/integration/export_minimal_spec.rb  # single file
+$ LEGACY_GPG=/usr/bin/gpg1 bundle exec rake test             # against GnuPG 1.4
 $ bundle exec rake clean                                     # drop generated files
 ```
+
+CI runs the suite on Ruby 3.2 through 4.0, plus one more pass against the
+GnuPG 1.4.23 Ubuntu ships as `gnupg1`, which is what keeps the 1.4 branches
+of the resource honest.
 
 ## License
 
