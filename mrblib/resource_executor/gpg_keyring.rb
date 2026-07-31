@@ -295,14 +295,18 @@ module ::MItamae
         def verify_target_outside_homedir(homedir)
           relative = homedir_relative_path(homedir)
 
-          # Both ways of placing the target, because the write lands on
-          # gpg's file by either. Resolved says where the bytes end up;
-          # the paths as written say which name gpg is given, and gpg
+          # Every way of placing the target, because the write lands on
+          # gpg's file by any of them. Resolved says where the bytes end
+          # up; the paths as written say which name gpg is given, and gpg
           # walks the same links the write does - a `public-keys.d` that
           # is a symlink out of the homedir puts the resolved target
           # somewhere else entirely while staying the path keyboxd creates
-          # its database at, which is then the file the keyring lands on.
-          [relative, lexical_homedir_relative_path(homedir)].each do |name|
+          # its database at, which is then the file the keyring lands on;
+          # and the walk finds the homedir under whatever other name the
+          # target reached it by, which neither of the other two can see.
+          [relative,
+           lexical_homedir_relative_path(homedir),
+           alias_homedir_relative_path(homedir)].each do |name|
             next if name.nil?
             next unless protected_homedir_entry?(name)
 
@@ -429,6 +433,45 @@ module ::MItamae
         def lexical_homedir_relative_path(homedir)
           relative_to(normalize_path(File.expand_path(homedir)),
                       normalize_path(File.expand_path(attributes.path)))
+        end
+
+        # And the same question again for a target that reaches the
+        # homedir under another name. Neither comparison above sees that
+        # one: resolving takes both sides all the way through their links,
+        # so a reserved directory pointing out of the homedir carries the
+        # target out with it, while the paths as written cannot tell that
+        # `/alias` is the homedir at all. The walk can. It steps down the
+        # target's own components until one of them *is* the homedir -
+        # compared by device and inode, so every alias of it counts - and
+        # what is left is the part gpg is going to name too.
+        #
+        # A homedir that is not there yet has no aliases and ends the walk
+        # at once. Nothing inside it exists either, so the comparisons
+        # above have nothing to be fooled by and answer it between them.
+        ALIAS_HOMEDIR_RELATIVE = [
+          '[ -e "$2" ] || exit 1',
+          'p=/',
+          'rest=${1#/}',
+          'while :; do',
+          '  if [ "$p" -ef "$2" ]; then',
+          '    printf "%s\\0" "$rest"',
+          '    exit 0',
+          '  fi',
+          '  [ -n "$rest" ] || exit 1',
+          '  seg=${rest%%/*}',
+          '  case $rest in *"/"*) rest=${rest#*/} ;; *) rest= ;; esac',
+          '  case $p in /) p=/$seg ;; *) p=$p/$seg ;; esac',
+          '  [ -e "$p" ] || exit 1',
+          'done',
+        ].join("\n").freeze
+
+        def alias_homedir_relative_path(homedir)
+          target = normalize_path(File.expand_path(attributes.path))
+          result = run_command(['sh', '-c', ALIAS_HOMEDIR_RELATIVE, 'sh', target, homedir], error: false)
+          return nil if result.exit_status != 0
+
+          rest = result.stdout.split("\0")[0]
+          rest.nil? || rest.empty? ? nil : rest
         end
 
         def relative_to(root, target)
