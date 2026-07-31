@@ -313,10 +313,25 @@ Inside a Claude Code session that last call does not go through — the
 proxy answers `403 Merging into a protected base branch is not permitted
 for this session type`, which is about the session rather than about the
 branch. Run the gates as above and then merge with the GitHub MCP
-server's `merge_pull_request` (`merge_method: "merge"`). It takes no
-`sha`, so the precondition below is lost: read the head as the last thing
-before calling it, and re-run the whole check rather than trusting an
-earlier reading.
+server's `merge_pull_request` (`merge_method: "merge"`).
+
+That tool takes no `sha`, so nothing server-side refuses a merge of a
+revision that arrived after the check. Re-reading the head just before
+calling it does not help by itself — a push would make that read return
+the *new* revision, and the merge would take it. Keep the head the
+verdict was checked against, read it again, and refuse unless the two are
+the same value:
+
+    verified=$head   # the revision every gate above passed on
+    again=$(curl -sS "https://api.github.com/$repo/pulls/$n" | jq -r '.head.sha // empty')
+    [ "$again" = "$verified" ] ||
+      { echo "no: head moved $verified -> ${again:-unknown}" >&2; exit 1; }
+    # only now call merge_pull_request
+
+This narrows the window to the gap between that comparison and the call
+rather than closing it: the two cannot be made atomic from here. Only the
+`sha` precondition can, which is why the REST call stays in the script
+above for wherever it is allowed to run.
 
 The verdict line has to read `clean` and name the head sha, and the
 merge does not run until it does — which is what those four `exit`s are
