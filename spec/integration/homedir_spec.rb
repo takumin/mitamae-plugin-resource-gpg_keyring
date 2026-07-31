@@ -93,6 +93,16 @@ RSpec.describe 'homedir' do
     expect(homedir_fingerprints(gpg_homedir)).to eq([HOMEDIR_KEY_FINGERPRINT])
   end
 
+  # Spelled differently again, but with the difference in the part of the
+  # homedir that does not exist yet: nothing on disk resolves that `..`,
+  # and the `mkdir -p` that does comes after the check.
+  it 'refuses the same collision when the homedir ends in a dot segment' do
+    run = run_mitamae('homedir_dot_segment')
+    expect_mitamae_failure(run, /is a file gpg keeps in its homedir/)
+
+    expect(File.exist?(gpg_homedir)).to be(false)
+  end
+
   it 'refuses a keyring aimed inside a directory gpg keeps in the homedir' do
     run = run_mitamae('homedir_target_keyboxd')
     expect_mitamae_failure(run, /is inside public-keys\.d, which gpg keeps in its homedir/)

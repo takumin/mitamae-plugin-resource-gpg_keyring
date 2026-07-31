@@ -380,15 +380,43 @@ module ::MItamae
         # as written and only expanded. Nothing can be written through it
         # either, so it is not a way past the checks above.
         #
-        # A leading `//` survives the resolving: POSIX leaves it to the
-        # implementation, and Linux answers `cd //tmp && pwd -P` with
-        # `//tmp` while meaning the same directory as `/tmp`. Two paths
-        # for one directory is the thing this whole comparison is trying
-        # not to be fooled by, so it is collapsed here.
+        # Either answer is then normalized, because the resolver returns
+        # the components that do not exist yet exactly as they were
+        # written: `/var/lib/new/..` with no `new` on disk resolves to
+        # itself, and a target of `/var/lib/pubring.kbx` reads as outside
+        # a homedir that `mkdir -p` is about to make mean `/var/lib`.
         def resolve_path(path)
           result = run_command(['sh', '-c', RESOLVE_PATH, 'sh', path], error: false)
-          resolved = result.exit_status == 0 ? result.stdout.strip : File.expand_path(path)
-          resolved.sub(/\A\/\/+/, '/')
+          normalize_path(result.exit_status == 0 ? result.stdout.strip : File.expand_path(path))
+        end
+
+        # Drops `.` and `..` from an already resolved path, which is the
+        # one place it can be done by string alone. Everything in front of
+        # a leftover `..` has been through `cd -P`, or is a directory this
+        # run is about to create - and `mkdir -p` creates directories,
+        # never symlinks - so no component it walks back out of can be a
+        # link that would send the kernel somewhere else. `..` at the root
+        # is the root, as it is on disk.
+        #
+        # Empty segments go with them, which covers the leading `//` that
+        # survives the resolving: POSIX leaves it to the implementation,
+        # and Linux answers `cd //tmp && pwd -P` with `//tmp` while
+        # meaning the same directory as `/tmp`. Two paths for one
+        # directory is the thing this whole comparison is trying not to be
+        # fooled by.
+        def normalize_path(path)
+          segments = []
+          path.split('/').each do |segment|
+            case segment
+            when '', '.'
+              next
+            when '..'
+              segments.pop
+            else
+              segments << segment
+            end
+          end
+          '/' + segments.join('/')
         end
 
         def list_keys(homedir)
