@@ -136,6 +136,30 @@ RSpec.describe 'homedir' do
     expect(File.exist?(gpg_homedir)).to be(false)
   end
 
+  # Taking the dot segments out can uncover a name the resolver never
+  # looked at, and here it is a symlink leading straight back to where the
+  # target is.
+  it 'refuses a collision uncovered by dropping a dot segment' do
+    FileUtils.mkdir_p(temporary('h'))
+    FileUtils.mkdir_p(temporary('real'))
+    File.symlink('../real', temporary('h/alias'))
+
+    run = run_mitamae('homedir_dot_segment_symlink')
+    expect_mitamae_failure(run, /is a file gpg keeps in its homedir/)
+
+    expect(File.exist?(temporary('h/new'))).to be(false)
+    expect(Dir.children(temporary('real'))).to be_empty
+  end
+
+  # gpg locks a store by creating `<name>.lock` next to it, so that name is
+  # as much gpg's as the store is.
+  it 'refuses a keyring aimed at the lock of one of those files' do
+    run = run_mitamae('homedir_target_lock')
+    expect_mitamae_failure(run, /is a file gpg keeps in its homedir/)
+
+    expect(File.exist?(gpg_homedir)).to be(false)
+  end
+
   # A newline is a byte a name may end with and `$(...)` always takes off,
   # so the homedir - resolved by `pwd` alone - and the target - whose
   # parent goes through a capture - would disagree about which directory
@@ -378,6 +402,26 @@ RSpec.describe 'homedir' do
     # The recipe's keyserver is a port that refuses, so a fetch would end
     # the run: getting this far is itself the key having been found.
     expect(run.log).to include('gpg key already in homedir')
+    expect(run.log).not_to include('--recv-keys')
+  end
+
+  # The other side of that: `use-keyboxd` in GnuPG's own configuration says
+  # nothing about a gpg that has never heard of keyboxd, and a 1.4 with a
+  # newer gpgconf beside it - which is exactly what a legacy run here is -
+  # answers out of pubring.gpg whatever that file says.
+  it 'ignores keyboxd configuration the gpg in use cannot read' do
+    skip 'needs a gpg without keyboxd' unless legacy_gpg?
+
+    import_into_homedir(gpg_homedir, fixture('valid-key.asc'))
+
+    sysconfdir = temporary('etc-gnupg')
+    FileUtils.mkdir_p(sysconfdir)
+    File.write(File.join(sysconfdir, 'common.conf'), "use-keyboxd\n")
+
+    run = with_gpgconf_sysconfdir(sysconfdir) { run_mitamae('homedir_offline') }
+    expect_mitamae_success(run)
+
+    expect(fingerprint_of(temporary('homedir-offline.gpg.asc'))).to eq(HOMEDIR_KEY_FINGERPRINT)
     expect(run.log).not_to include('--recv-keys')
   end
 

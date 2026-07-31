@@ -40,6 +40,12 @@ module ::MItamae
         # LIST_OPTIONS, so this is the only version that has to be named.
         MINIMUM_GPG_VERSION = '1.4.3'.freeze
 
+        # Where keyboxd arrived, and with it the `use-keyboxd` that
+        # common.conf can carry. Older binaries read that file and ignore
+        # the option, keeping their keys where they always did, so what it
+        # says is only worth reading from here on.
+        MINIMUM_KEYBOXD_VERSION = '2.3'.freeze
+
         # Public key algorithms that need ECC support in gpg (RFC 6637
         # and RFC 8032 assignments). GnuPG carries none of them before
         # 2.1, which is what makes them worth naming: 1.4 rejects such a
@@ -138,18 +144,27 @@ module ::MItamae
           true
         end
 
+        # The version of the gpg in use, or nil where its banner says
+        # nothing recognizable. Anchored to GnuPG's own banner ("gpg
+        # (GnuPG) 2.4.4", or "gpg (GnuPG/MacGPG2) 2.2.41" once repackaged)
+        # rather than to the first number on the first line: a wrapper
+        # that announces itself first would otherwise have its own version
+        # read as gpg's.
+        def gpg_version
+          if @gpg_version.nil?
+            result = run_command(['gpg', '--version'], error: false)
+            match = result.exit_status == 0 ? /\(GnuPG[^)]*\)\s+(\d+\.\d+(\.\d+)?)/.match(result.stdout) : nil
+            @gpg_version = match ? match[1] : false
+          end
+          @gpg_version ? @gpg_version : nil
+        end
+
         # Checked up front so an ancient gpg is named as such, instead of
         # failing later as an unknown-option error from inside a fetch.
         def verify_gpg_version
-          result = run_command(['gpg', '--version'], error: false)
-          # Anchored to GnuPG's own banner ("gpg (GnuPG) 2.4.4", or
-          # "gpg (GnuPG/MacGPG2) 2.2.41" once repackaged) rather than to
-          # the first number on the first line: a wrapper that announces
-          # itself first would otherwise have its own version read as
-          # gpg's and get a perfectly good binary refused.
-          match = result.exit_status == 0 ? /\(GnuPG[^)]*\)\s+(\d+\.\d+(\.\d+)?)/.match(result.stdout) : nil
+          version = gpg_version
 
-          if match.nil?
+          if version.nil?
             # A build that prints no recognizable banner is left alone.
             # Refusing to run on a version that cannot be read would be
             # worse than letting the actual gpg invocations speak for
@@ -157,8 +172,6 @@ module ::MItamae
             MItamae.logger.debug 'could not read the gpg version, skipping the minimum version check'
             return
           end
-
-          version = match[1]
 
           MItamae.logger.debug "gpg version: #{version}"
           return if version_at_least?(version, MINIMUM_GPG_VERSION)
@@ -331,9 +344,21 @@ module ::MItamae
           elsif relative.include?('/')
             false
           else
-            # `<name>~` is gpg's backup of `<name>`, and belongs to it.
-            name = entry.end_with?('~') ? entry[0..-2] : entry
-            GPG_HOMEDIR_FILES.include?(name) or entry.start_with?('S.') or entry.end_with?('.conf')
+            # Every name gpg keeps brings two more with it: `<name>~`, the
+            # backup it renames a store to before rewriting it, and
+            # `<name>.lock`, the lock it takes over it - a keyring written
+            # over that one is read as a lock held by a process that does
+            # not exist ("invalid pid -1 in lockfile"), and gpg then
+            # refuses the keyring it names. Both come off the end rather
+            # than being listed, so the list stays one entry per file.
+            # `.#lk...` is the other half of that locking, named after the
+            # inode and unpredictable, so it goes by its prefix like the
+            # sockets do.
+            name = entry
+            name = name[0..-6] if name.end_with?('.lock')
+            name = name[0..-2] if name.end_with?('~')
+            GPG_HOMEDIR_FILES.include?(name) or entry.start_with?('S.') or
+              entry.start_with?('.#lk') or entry.end_with?('.conf')
           end
         end
 
@@ -494,13 +519,28 @@ module ::MItamae
         # the sentinel byte after it answers, a name being free to end in
         # a newline too. Anything else coming back is not an answer at
         # all, and is read as a resolver failure.
+        #
+        # Normalizing can hand back a path the resolver has not looked at:
+        # dropping `new/..` from `h/new/../alias` uncovers `h/alias`,
+        # which may be a symlink of its own - and is what the kernel walks
+        # once `mkdir -p` creates `new`. So the answer goes back in until
+        # it stops changing, which for a path with no dot segments in it
+        # is the first time round. The count is a backstop rather than a
+        # budget: nothing known reaches it, and a path that would is
+        # answered like one that cannot be resolved at all.
         def resolve_path(path)
-          result = run_command(['sh', '-c', RESOLVE_PATH, 'sh', path], error: false)
-          if result.exit_status == 0 and result.stdout.end_with?("\nx")
-            normalize_path(result.stdout[0..-3])
-          else
-            normalize_path(File.expand_path(path))
+          candidate = path
+          41.times do
+            result = run_command(['sh', '-c', RESOLVE_PATH, 'sh', candidate], error: false)
+            break unless result.exit_status == 0 and result.stdout.end_with?("\nx")
+
+            answer = result.stdout[0..-3]
+            normalized = normalize_path(answer)
+            return normalized if normalized.eql?(answer)
+
+            candidate = normalized
           end
+          normalize_path(File.expand_path(path))
         end
 
         # Drops `.` and `..` from an already resolved path, which is the
@@ -664,6 +704,7 @@ module ::MItamae
         # there is neither gpgconf nor common.conf and both reads fail,
         # which is the right answer there.
         def keyboxd_homedir?(homedir)
+          return false unless gpg_knows_keyboxd?
           return true if use_keyboxd?(File.join(homedir, 'common.conf'))
 
           result = run_command(['gpgconf', '--list-dirs', 'sysconfdir'], error: false)
@@ -677,6 +718,24 @@ module ::MItamae
           return false if result.exit_status != 0
 
           result.stdout.lines.any? {|line| line.strip.split(' ')[0].eql?('use-keyboxd') }
+        end
+
+        # Whether the gpg in use has ever heard of keyboxd, which is what
+        # makes those files worth reading at all. Neither of them is the
+        # binary's: a homedir carrying a common.conf from a 2.x era, or a
+        # system file written for a 2.x installed beside it, says nothing
+        # about a 1.4 that answers out of pubring.gpg regardless - and a
+        # gpgconf from that neighbour is there to be found either way,
+        # which is the shape of this repository's own legacy runs.
+        #
+        # A version rather than a capability query, because the obvious
+        # query - `gpg --dump-options` - writes several hundred lines into
+        # the debug log of every run that names a homedir. An unreadable
+        # banner is not turned into a claim about the binary: the files
+        # get read, as they were before any of this.
+        def gpg_knows_keyboxd?
+          version = gpg_version
+          version.nil? or version_at_least?(version, MINIMUM_KEYBOXD_VERSION)
         end
 
         # gpg escapes ':' and '\' (and control characters) in colon-format
