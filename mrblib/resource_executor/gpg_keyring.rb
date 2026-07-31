@@ -199,10 +199,17 @@ module ::MItamae
         # written with a plain fprintf in gpg (no translation), so the
         # number can be read whatever the locale is. Returns nil unless
         # the key turns out to be one this gpg cannot handle.
-        def unsupported_algorithm(path)
+        #
+        # The dump reads no keyring, but gpg still initializes the homedir
+        # it is pointed at - against an untouched HOME it leaves a
+        # ~/.gnupg/pubring.kbx behind - so it takes the run's own homedir
+        # like everything else. Both callers hand over the throwaway their
+        # import has just failed in: nothing is imported here, so there is
+        # nothing to keep out of it.
+        def unsupported_algorithm(homedir, path)
           return nil if gpg_supports_ecc?
 
-          result = run_command(['gpg', '--list-packets', path], error: false)
+          result = run_command(gpg(homedir, ['--list-packets', path]), error: false)
           return nil if result.exit_status != 0
 
           line = result.stdout.lines.detect {|l| l.include?(':public key packet:') }
@@ -238,8 +245,8 @@ module ::MItamae
 
         # Appended to an import failure so the cause is named instead of
         # left to gpg's misleading uid complaint.
-        def unsupported_algorithm_note(path)
-          algorithm = unsupported_algorithm(path)
+        def unsupported_algorithm_note(homedir, path)
+          algorithm = unsupported_algorithm(homedir, path)
           return '' if algorithm.nil?
 
           ": the key uses #{algorithm}, which the gpg in use does not support (GnuPG 2.1 or newer is required for ECC keys)"
@@ -949,7 +956,7 @@ module ::MItamae
           Dir.mktmpdir{|homedir|
             result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', attributes.path]), error: false)
             if result.exit_status != 0
-              raise_command_failure("gpg import key: #{attributes.path}", unsupported_algorithm_note(attributes.path))
+              raise_command_failure("gpg import key: #{attributes.path}", unsupported_algorithm_note(homedir, attributes.path))
             end
 
             records = list_keys(homedir)
@@ -1044,7 +1051,7 @@ module ::MItamae
 
                   result = run_command(gpg(homedir, IMPORT_OPTIONS + ['--import', download]), error: false)
                   if result.exit_status != 0
-                    raise_command_failure("gpg import key: fingerprint: #{desired.fingerprint}", unsupported_algorithm_note(download))
+                    raise_command_failure("gpg import key: fingerprint: #{desired.fingerprint}", unsupported_algorithm_note(homedir, download))
                   end
                 else
                   MItamae.logger.debug "gpg download keyserver: #{desired.keyserver}"
