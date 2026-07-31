@@ -72,8 +72,14 @@ module ::MItamae
         # component comes next each read one, none of them is a place for
         # a keyring, and --no-options does not cover them anyway (they are
         # read by the libraries, not by gpg's option parser).
+        #
+        # Backups are matched by suffix for the same reason: gpg renames a
+        # store to `<name>~` before rewriting it, so every name here has a
+        # second one it never had to be listed under. Listing them is what
+        # left `secring.gpg~` out while `pubring.gpg~` and `pubring.kbx~`
+        # were in.
         GPG_HOMEDIR_FILES = %w[
-          pubring.gpg pubring.gpg~ pubring.kbx pubring.kbx~ secring.gpg
+          pubring.gpg pubring.kbx secring.gpg
           trustdb.gpg tofu.db random_seed .gpg-v21-migrated
           sshcontrol trustlist.txt
         ].freeze
@@ -276,6 +282,13 @@ module ::MItamae
               if relative.include?('/')
                 raise "#{attributes.path} is inside #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
               end
+              # The target *is* one of gpg's directories, rather than
+              # something under one. A run that writes it leaves a plain
+              # file where a directory belongs, which gpg only finds out
+              # about when it next needs the directory ("Not a directory").
+              if GPG_HOMEDIR_DIRS.include?(entry)
+                raise "#{attributes.path} is #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+              end
               raise "#{attributes.path} is a file gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
             end
           end
@@ -303,18 +316,24 @@ module ::MItamae
         end
 
         # Whether a path relative to the homedir names something gpg keeps
-        # there. The first segment is what decides: one segment on its own
-        # is matched against the file names, and anything deeper against
-        # the directories, since nothing inside those is a place for a
-        # keyring either. Kept in one place because both the path and the
-        # hard link reach the same question by different routes, and a
-        # name gpg starts using has to be learned once rather than twice.
+        # there. The first segment is what decides, and one of gpg's
+        # directories is refused whether the target is under it or is it -
+        # a keyring written over the name leaves a file where gpg needs a
+        # directory. Anything deeper than one segment is that case and
+        # nothing else; the file names only answer for a segment on its
+        # own. Kept in one place because both the path and the hard link
+        # reach the same question by different routes, and a name gpg
+        # starts using has to be learned once rather than twice.
         def protected_homedir_entry?(relative)
           entry = relative.split('/')[0]
-          if relative.include?('/')
-            GPG_HOMEDIR_DIRS.include?(entry)
+          if GPG_HOMEDIR_DIRS.include?(entry)
+            true
+          elsif relative.include?('/')
+            false
           else
-            GPG_HOMEDIR_FILES.include?(entry) or entry.start_with?('S.') or entry.end_with?('.conf')
+            # `<name>~` is gpg's backup of `<name>`, and belongs to it.
+            name = entry.end_with?('~') ? entry[0..-2] : entry
+            GPG_HOMEDIR_FILES.include?(name) or entry.start_with?('S.') or entry.end_with?('.conf')
           end
         end
 

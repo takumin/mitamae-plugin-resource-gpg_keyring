@@ -136,6 +136,24 @@ RSpec.describe 'homedir' do
     expect(File.exist?(gpg_homedir)).to be(false)
   end
 
+  # Being one of those directories, rather than being under one: the write
+  # would leave a plain file where gpg needs a directory.
+  it 'refuses a keyring aimed at a directory gpg keeps in the homedir' do
+    run = run_mitamae('homedir_target_keyboxd_dir')
+    expect_mitamae_failure(run, /is public-keys\.d, which gpg keeps in its homedir/)
+
+    expect(File.exist?(gpg_homedir)).to be(false)
+  end
+
+  # gpg renames a store to `<name>~` before rewriting it, so every name it
+  # keeps has a second one - matched by the suffix rather than listed.
+  it 'refuses a keyring aimed at the backup of one of those files' do
+    run = run_mitamae('homedir_target_backup')
+    expect_mitamae_failure(run, /is a file gpg keeps in its homedir/)
+
+    expect(File.exist?(gpg_homedir)).to be(false)
+  end
+
   # The path as written says `keys/pubring.db`, which no list covers; where
   # it leads is keyboxd's database.
   it 'refuses a keyring aimed through a symlink to one of those directories' do
