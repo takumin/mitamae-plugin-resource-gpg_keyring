@@ -98,10 +98,59 @@ jobs:
       - name: Test
         run: bundle exec rake test
 
+  # The resource supports GnuPG 1.4.3 and up, and 1.4 differs from 2.x in
+  # ways it has to absorb (no --fixed-list-mode uid records, no
+  # --receive-keys alias, sub key fingerprints only when --fingerprint is
+  # repeated). None of that is exercised by the gpg 2.x on the runner, so
+  # the same suite runs once more against the 1.4.23 Ubuntu still ships.
+  # One Ruby only: the axis under test here is gpg, not Ruby.
+  legacy:
+    name: Test (GnuPG 1.4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: '3.4'
+
+      - name: Install gems
+        run: bundle install
+
+      # Provisioning rather than build logic, which is why this is a `run:`
+      # block and not a rake task: `gnupg1` installs 1.4.23 as
+      # /usr/bin/gpg1 next to the runner's own gpg 2.x, leaving both on the
+      # box. Not pinned because the archive carries one version per release.
+      - name: Install GnuPG 1.4
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gnupg1
+
+      - name: Show tool versions
+        run: |
+          gpg --version | head -1
+          gpg1 --version | head -1
+          curl --version | head -1
+
+      - name: Test
+        env:
+          # Only mitamae gets the legacy binary, through a shim directory
+          # prepended to its PATH; the spec helpers keep inspecting results
+          # with the modern gpg (see spec/spec_helper.rb).
+          LEGACY_GPG: /usr/bin/gpg1
+        run: bundle exec rake test
+
   # The single status check to require in branch protection.
   ci:
     name: CI
-    needs: [lint, test]
+    needs: [lint, test, legacy]
     runs-on: ubuntu-latest
     timeout-minutes: 3
     permissions: {}

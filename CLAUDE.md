@@ -95,7 +95,9 @@ installs them; `rake lint` depends on it.
   against an old GnuPG (the resource supports 1.4.3 and up). Only
   mitamae gets the legacy binary, via a shim directory prepended to its
   PATH; the spec helpers keep inspecting results with the modern `gpg`
-  from PATH. The ed25519 example is skipped there.
+  from PATH. The ed25519 example is skipped there. CI runs this as its
+  own job (`legacy`, below); on Debian/Ubuntu the binary comes from
+  `apt-get install gnupg1`.
 - `bundle exec rake clean` removes downloaded binaries and generated
   files (`git clean -xdf`).
 
@@ -111,6 +113,17 @@ not in a `run:` block.
   across Ruby 3.2/3.3/3.4/4.0 on `ubuntu-latest`. Bundler 4, which
   `Gemfile.lock` pins, needs Ruby >= 3.2, so that is the floor. Only the
   `lint` job sets up aqua — the suite has no aqua-managed tool.
+- `legacy` runs the same `rake test` once more with
+  `LEGACY_GPG=/usr/bin/gpg1`, against the GnuPG 1.4.23 that Ubuntu still
+  packages as `gnupg1`. It is what keeps the 1.4 branches of the resource
+  honest — the runner's own gpg is 2.x and exercises none of them. One
+  Ruby (3.4), because the axis under test is gpg rather than Ruby;
+  pairing it with the whole Ruby matrix would quadruple the cost for no
+  signal. Installing the package is the one `run:` block in the workflow
+  that is not a rake task, and it is provisioning, like the Ruby and aqua
+  setup actions above it. If Ubuntu ever drops `gnupg1`, the job has to
+  build 1.4 from source or go — do not quietly let it fall back to gpg 2,
+  which is a green run that checks nothing.
 - Linux only: this resource exists to place apt/rpm keyrings, so a macOS
   leg would cost minutes to cover a platform nobody provisions. The
   consequence is that the darwin/aarch64 branch of `spec_helper`'s
