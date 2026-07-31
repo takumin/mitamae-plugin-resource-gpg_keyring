@@ -103,6 +103,32 @@ RSpec.describe 'homedir' do
     expect(File.exist?(gpg_homedir)).to be(false)
   end
 
+  # A trailing space is part of a directory's name, and `pwd` prints it
+  # right before the newline the resolved path has to lose.
+  it 'refuses the same collision when the homedir name ends in a space' do
+    FileUtils.mkdir_p(temporary('gnupg '))
+    FileUtils.chmod(0o700, temporary('gnupg '))
+
+    run = run_mitamae('homedir_trailing_space')
+    expect_mitamae_failure(run, /is a file gpg keeps in its homedir/)
+
+    expect(Dir.children(temporary('gnupg '))).to be_empty
+  end
+
+  # Two names for one file, which no comparison of paths can see.
+  it 'refuses a keyring hard-linked to one gpg keeps in the homedir' do
+    import_into_homedir(gpg_homedir, fixture('valid-key.asc'))
+    # Whichever of the two the gpg under test wrote.
+    keyring = %w[pubring.kbx pubring.gpg].detect { |name| File.exist?(File.join(gpg_homedir, name)) }
+    before = File.binread(File.join(gpg_homedir, keyring))
+    File.link(File.join(gpg_homedir, keyring), temporary('linked.gpg'))
+
+    run = run_mitamae('homedir_target_hard_link')
+    expect_mitamae_failure(run, /is a hard link to #{Regexp.escape(keyring)}, which gpg keeps in its homedir/)
+
+    expect(File.binread(File.join(gpg_homedir, keyring))).to eq(before)
+  end
+
   it 'refuses a keyring aimed inside a directory gpg keeps in the homedir' do
     run = run_mitamae('homedir_target_keyboxd')
     expect_mitamae_failure(run, /is inside public-keys\.d, which gpg keeps in its homedir/)

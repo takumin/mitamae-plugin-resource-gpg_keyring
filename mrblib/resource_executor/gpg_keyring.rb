@@ -269,22 +269,83 @@ module ::MItamae
         # sockets, by their S. prefix.
         def verify_target_outside_homedir(homedir)
           relative = homedir_relative_path(homedir)
-          return if relative.nil?
 
-          entry = relative.split('/')[0]
-          if relative.include?('/')
-            if GPG_HOMEDIR_DIRS.include?(entry)
-              raise "#{attributes.path} is inside #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+          unless relative.nil?
+            if protected_homedir_entry?(relative)
+              entry = relative.split('/')[0]
+              if relative.include?('/')
+                raise "#{attributes.path} is inside #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+              end
+              raise "#{attributes.path} is a file gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
             end
-          elsif GPG_HOMEDIR_FILES.include?(entry) or entry.start_with?('S.') or entry.end_with?('.conf')
-            raise "#{attributes.path} is a file gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
           end
+
+          # A hard link is a second name for one file, and no amount of
+          # resolving turns two names into one: the write opens the target
+          # and truncates what is behind it, so a target linked to one of
+          # gpg's own files destroys that file while every comparison
+          # above - which only ever sees paths - reads it as somewhere
+          # else entirely. It is asked after those, not instead of them,
+          # because only a target that already exists can be a link, and
+          # theirs is the case where nothing is there yet.
+          linked = linked_homedir_entry(homedir)
+          if !linked.nil? and protected_homedir_entry?(linked)
+            raise "#{attributes.path} is a hard link to #{linked}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+          end
+
+          return if relative.nil?
 
           # Any other name in there is the recipe's business - it works,
           # and the resource has no say in how someone lays out their
           # directories. Still worth a word: nothing but this warning
           # stands between that layout and a name gpg decides to use.
           MItamae.logger.warn "keyring path is inside the gpg homedir: #{attributes.path} (it is written after the homedir is updated, so a name gpg uses would be overwritten)"
+        end
+
+        # Whether a path relative to the homedir names something gpg keeps
+        # there. The first segment is what decides: one segment on its own
+        # is matched against the file names, and anything deeper against
+        # the directories, since nothing inside those is a place for a
+        # keyring either. Kept in one place because both the path and the
+        # hard link reach the same question by different routes, and a
+        # name gpg starts using has to be learned once rather than twice.
+        def protected_homedir_entry?(relative)
+          entry = relative.split('/')[0]
+          if relative.include?('/')
+            GPG_HOMEDIR_DIRS.include?(entry)
+          else
+            GPG_HOMEDIR_FILES.include?(entry) or entry.start_with?('S.') or entry.end_with?('.conf')
+          end
+        end
+
+        # The name, relative to the homedir, of the file the target is
+        # another name for - or nil if it is a name of its own. `-ef`
+        # compares device and inode, which is the only thing that answers
+        # this; the walk is over the homedir rather than over the target,
+        # since a link is found from either end and only one of the two is
+        # a directory that can be listed. One level down is as deep as it
+        # goes, which is as deep as gpg's own layout is.
+        LINKED_HOMEDIR_ENTRY = [
+          '[ -f "$1" ] || exit 1',
+          'cd -- "$2" 2>/dev/null || exit 1',
+          'for c in * .* */*; do',
+          '  [ -f "$c" ] || continue',
+          '  [ "$1" -ef "$c" ] || continue',
+          '  printf "%s" "$c"',
+          '  exit 0',
+          'done',
+          'exit 1',
+        ].join("\n").freeze
+
+        def linked_homedir_entry(homedir)
+          # Resolved, because the walk runs from inside the homedir and a
+          # path the recipe wrote relative to mitamae's working directory
+          # would name nothing from there.
+          result = run_command(['sh', '-c', LINKED_HOMEDIR_ENTRY, 'sh', resolve_path(attributes.path), homedir], error: false)
+          return nil if result.exit_status != 0
+
+          entry = result.stdout
+          entry.empty? ? nil : entry
         end
 
         # Where the target sits under the homedir, or nil if it is outside
@@ -385,9 +446,16 @@ module ::MItamae
         # written: `/var/lib/new/..` with no `new` on disk resolves to
         # itself, and a target of `/var/lib/pubring.kbx` reads as outside
         # a homedir that `mkdir -p` is about to make mean `/var/lib`.
+        # Only the line terminator comes off, because everything else the
+        # resolver prints is the path: a directory may legitimately be
+        # named with a trailing space, and stripping it turns a homedir of
+        # `/srv/gnupg ` into `/srv/gnupg` while the target inside it keeps
+        # the space - two strings that no longer contain one another. The
+        # terminator is there because the directory case answers with
+        # `pwd`, which prints one; the other cases printf without.
         def resolve_path(path)
           result = run_command(['sh', '-c', RESOLVE_PATH, 'sh', path], error: false)
-          normalize_path(result.exit_status == 0 ? result.stdout.strip : File.expand_path(path))
+          normalize_path(result.exit_status == 0 ? result.stdout.chomp : File.expand_path(path))
         end
 
         # Drops `.` and `..` from an already resolved path, which is the
