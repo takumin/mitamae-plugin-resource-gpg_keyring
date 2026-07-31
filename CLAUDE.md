@@ -68,8 +68,9 @@ installs them; `rake lint` depends on it.
 
 - `bundle exec rake` — the full pipeline (`lint` then `test`), identical
   to what CI runs. Keep it green.
-- `bundle exec rake test` — the whole suite, fully offline. This is the
-  default gate; keep it green.
+- `bundle exec rake test` — the whole suite; offline once mitamae is in
+  hand, which the environment section above covers. This is the default
+  gate; keep it green.
 - `bundle exec rake lint` — three passes over `.github/workflows/`:
   actionlint (does it parse; it delegates `run:` blocks to the pinned
   shellcheck rather than a runner image's), zizmor (is it safe) and
