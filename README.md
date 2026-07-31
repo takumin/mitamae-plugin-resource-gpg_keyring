@@ -247,12 +247,19 @@ $ bundle install
 $ bundle exec rake        # lint then test, identical to CI
 ```
 
-`rake test` is the suite on its own and needs nothing but the gems. It
-drives the real `mitamae local` binary against the recipes in `test/recipe/`
-and runs fully offline: url and keyserver cases are served by a local
+`rake test` is the suite on its own and needs nothing but the gems and a
+mitamae binary. It drives the real `mitamae local` binary against the
+recipes in `test/recipe/`, and once that binary is in hand the examples
+themselves are offline: url and keyserver cases are served by a local
 fixture server started by the suite, and all keys are committed synthetic
-fixtures. mitamae is taken from `PATH` when present, otherwise a pinned
-release is downloaded into `.bin/` and checksum-verified; override with
+fixtures.
+
+Getting the binary is the one step that can reach the network. mitamae is
+taken from `PATH` when present, and otherwise from `.bin/`, which a first
+run populates by downloading a pinned release from GitHub and verifying it
+against the checksums published with it. So on a host with no network the
+suite runs only once mitamae is already available - on `PATH`, cached in
+`.bin/` by an earlier run, or named explicitly with
 `MITAMAE=/path/to/binary`.
 
 `rake lint` checks `.github/workflows/` with actionlint, zizmor and pinact,
