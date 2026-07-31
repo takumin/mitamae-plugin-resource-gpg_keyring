@@ -255,12 +255,14 @@ $ bundle install
 $ bundle exec rake        # lint then test, identical to CI
 ```
 
-`rake test` is the suite on its own and needs nothing but the gems and a
-mitamae binary. It drives the real `mitamae local` binary against the
-recipes in `test/recipe/`, and once that binary is in hand the examples
-themselves are offline: url and keyserver cases are served by a local
-fixture server started by the suite, and all keys are committed synthetic
-fixtures.
+`rake test` is the suite on its own. It wants the gems, a mitamae binary,
+and the same `gpg` and `curl` the resource asks of a target node - the
+examples drive the real resource, so its own prerequisite check is the first
+thing that stops a run without them, and the helpers inspect the results
+with `gpg` besides. It runs the recipes in `test/recipe/` through
+`mitamae local`, and once the binary is in hand the examples themselves are
+offline: url and keyserver cases are served by a local fixture server
+started by the suite, and all keys are committed synthetic fixtures.
 
 Getting the binary is the one step that can reach the network. mitamae is
 taken from `PATH` when present, and otherwise from `.bin/`, which a first
@@ -285,7 +287,10 @@ $ bundle exec rake clean                                     # git clean -xdf
 `rake clean` is `git clean -xdf` with no pathspec, so it removes every
 untracked file in the checkout - not just the downloaded binary and the
 temporary keyrings, but also work that has not been committed or staged
-yet. Commit or stash first, or run `git clean -xdn` to see what would go.
+yet. Run `git clean -xdn` first to see what would go. Committing covers what
+is tracked; stashing only covers the rest with `git stash --all`, since a
+plain `git stash` leaves untracked and ignored files exactly where `-x` and
+`-d` will find them.
 
 CI runs the suite on Ruby 3.2 through 4.0, plus one more pass against the
 GnuPG 1.4.23 Ubuntu ships as `gnupg1`, which is what keeps the 1.4 branches
