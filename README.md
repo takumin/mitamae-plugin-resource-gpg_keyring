@@ -271,8 +271,13 @@ on pull requests.
 ```console
 $ bundle exec rspec spec/integration/export_minimal_spec.rb  # single file
 $ LEGACY_GPG=/usr/bin/gpg1 bundle exec rake test             # against GnuPG 1.4
-$ bundle exec rake clean                                     # drop generated files
+$ bundle exec rake clean                                     # git clean -xdf
 ```
+
+`rake clean` is `git clean -xdf` with no pathspec, so it removes every
+untracked file in the checkout - not just the downloaded binary and the
+temporary keyrings, but also work that has not been committed or staged
+yet. Commit or stash first, or run `git clean -xdn` to see what would go.
 
 CI runs the suite on Ruby 3.2 through 4.0, plus one more pass against the
 GnuPG 1.4.23 Ubuntu ships as `gnupg1`, which is what keeps the 1.4 branches
