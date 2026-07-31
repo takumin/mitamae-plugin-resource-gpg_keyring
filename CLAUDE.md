@@ -11,6 +11,14 @@ mruby inside the mitamae binary — there is no CRuby at runtime, so stick to
 mruby-compatible code there. The specs run on CRuby; do not copy CRuby-only
 idioms into `mrblib/`.
 
+## Asking for a decision
+
+When a choice needs the user's call rather than Claude's, show the whole
+list of what is currently undecided alongside the question, not just the
+one in front of it. A decision made without its neighbouring open items
+in view tends to get made twice — once now, narrowly, and again later
+once the rest of the list surfaces and changes the earlier answer.
+
 ## Environment setup (required every session)
 
 Fresh containers (e.g. Claude Code on the web) have Ruby but neither the
@@ -193,9 +201,10 @@ not in a `run:` block.
 
 ## Pull request review loop
 
-Codex reviews pull requests here automatically. It starts when a draft is
-marked ready for review, or on an `@codex review` comment, and says where
-it is with reactions on the PR itself, left by
+Codex reviews pull requests here only when asked. Automatic review on
+marking a draft ready is turned off for this repository, so every
+review — the first one included — starts from an `@codex review`
+comment, and says where it is with reactions on the PR itself, left by
 `chatgpt-codex-connector[bot]`:
 
 - 👀 — review running. Nothing to do but wait; the bot takes it back
@@ -204,19 +213,19 @@ it is with reactions on the PR itself, left by
 - Findings arrive as review comments instead, with no reaction left
   behind.
 
-A clean review does not always say what it read. The *first* review, the
-one marking a draft ready triggers, leaves the 👍 and nothing else: no
-comment, no review object, nothing carrying a `Reviewed commit`. A clean
-*re*-review, the kind `@codex review` asks for, also posts an issue
-comment that names the revision. Only the second kind can be merged on,
-for the reason the next section gives.
+A clean verdict always names the revision it read: alongside the 👍, an
+issue comment carries `Reviewed commit: <sha>`. That is true of every
+clean review here, first one included, because none of them fire
+without `@codex review` asking — there is no bare-👍 case to work around.
 
-After pushing a fix for a review comment, do all three, in this order:
-reply on the thread explaining the fix, mark that thread resolved, then
-post a separate `@codex review` comment asking for a re-review. Do not
-use `@codex review` to trigger the *first* review — marking a draft ready
-does that, and when a PR stops being a draft is the owner's call, never
-Claude's.
+Claude is the one who posts `@codex review`, not the owner marking a
+draft ready: once the PR is ready for review and its checks are green,
+post the comment and wait for the reaction. After pushing a fix for a
+review comment, do all three, in this order: reply on the thread
+explaining the fix, mark that thread resolved, then post a separate
+`@codex review` comment asking for a re-review. When a PR stops being a
+draft is still the owner's call, never Claude's — only who asks for the
+review moved.
 
 A 👍 from `chatgpt-codex-connector[bot]` is approval to merge that PR —
 of the revision it was left for. Two things can make a 👍 the wrong
@@ -240,16 +249,6 @@ So a fix pushed for review feedback always has to earn a new 👍 through
 `@codex review` — which is why that step is not optional. Merge with a
 merge commit, matching the existing history, and bind the merge to the
 revision that was checked rather than to whatever the tip is by then.
-
-A bare 👍 with no verdict behind it is the same situation, and it is the
-normal outcome of a first review that found nothing. It says a review
-happened; it does not say on what. Post `@codex review`, wait for the
-comment that names a revision, and check that instead. Reaching for
-something else to date the revision with is a trap worth naming: check
-suites belong to the commit rather than to the branch, so a commit that
-was already built on some other branch carries a suite older than this
-PR's 👍, and a force-push onto it would read as approved. Ask the bot to
-name the revision; do not infer it.
 
 Reactions never arrive over webhooks the way comments and checks do, so a
 👍 is only seen by looking for it. Polling the PR is not enough either:
