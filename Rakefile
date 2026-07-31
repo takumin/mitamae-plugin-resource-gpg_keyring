@@ -1,6 +1,9 @@
 require 'rspec/core/rake_task'
 
-desc 'Run the test suite (fully offline)'
+# Offline once a mitamae binary is in hand - a checkout with none downloads
+# a pinned release first (spec/spec_helper.rb). The README's Development
+# section has the three ways to have one already.
+desc 'Run the test suite'
 RSpec::Core::RakeTask.new(:test)
 
 # What a dependency bot changes but cannot finish: it raises versions and
