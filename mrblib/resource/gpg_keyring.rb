@@ -6,6 +6,7 @@ module ::MItamae
         define_attribute :user_id, type: String
         define_attribute :url, type: String
         define_attribute :keyserver, type: String
+        define_attribute :homedir, type: String
 
         self.available_actions = [:create, :delete]
       end

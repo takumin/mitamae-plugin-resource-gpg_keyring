@@ -137,6 +137,41 @@ module GpgKeyringSpecHelper
     FileUtils.rm_rf(dir)
   end
 
+  # A gpg whose --gpgconf-list reports keyboxd as enabled, with every
+  # other call - including the listing and the export that follow - going
+  # to the real binary, which reads its own configuration as usual.
+  #
+  # It is how `use-keyboxd` set outside the homedir is reached from a
+  # spec. GnuPG resolves that option from the homedir's common.conf and a
+  # system-wide one whose location is compiled in; the second lives
+  # outside the repository, needs root to write, and would change every
+  # other gpg on the box for as long as an interrupted run left it there.
+  # What is left to pin here is that the backend comes from the gpg that
+  # is running rather than from a file this resource went looking for,
+  # and that is the answer this replaces.
+  def with_keyboxd_gpg
+    dir = File.join(BIN_DIR, 'keyboxd-gpg')
+    FileUtils.mkdir_p(dir)
+    stub = File.join(dir, 'gpg')
+    File.write(stub, <<~SCRIPT)
+      #!/bin/sh
+      for arg in "$@"; do
+        if [ "$arg" = "--gpgconf-list" ]; then
+          out=$(#{real_gpg} "$@") || exit $?
+          printf '%s\\n' "$out" | sed 's/^use_keyboxd:\\([^:]*\\):.*/use_keyboxd:\\1:1:/'
+          exit 0
+        fi
+      done
+      exec #{real_gpg} "$@"
+    SCRIPT
+    FileUtils.chmod(0o755, stub)
+    @gpg_stub_dir = dir
+    yield
+  ensure
+    @gpg_stub_dir = nil
+    FileUtils.rm_rf(dir)
+  end
+
   def mitamae_env
     dirs = []
     dirs << @gpg_stub_dir if @gpg_stub_dir
@@ -157,7 +192,10 @@ module GpgKeyringSpecHelper
       mitamae_env, mitamae_bin, 'local', '--log-level=debug', '--plugins=.plugins',
       recipe_path(recipe_name), chdir: ROOT_DIR
     )
-    MitamaeRun.new(log, status)
+    # A binary keyring puts non-text bytes into the debug log, while the
+    # capture carries the locale's encoding (US-ASCII where LANG is
+    # unset). Left alone, matching such a log raises instead of matching.
+    MitamaeRun.new(log.dup.force_encoding(Encoding::UTF_8).scrub, status)
   end
 
   def expect_mitamae_success(run)
@@ -181,9 +219,78 @@ module GpgKeyringSpecHelper
 
   def wipe_temporary
     FileUtils.mkdir_p(TEMPORARY_DIR)
+    kill_gpg_homedir(gpg_homedir)
     Dir.children(TEMPORARY_DIR).each do |entry|
       FileUtils.rm_rf(File.join(TEMPORARY_DIR, entry)) unless entry == '.gitkeep'
     end
+  end
+
+  # --- gpg homedirs -------------------------------------------------------
+
+  # A homedir named by a recipe outlives the run, so the suite inspects and
+  # populates it with plain gpg instead of going through the resource.
+  def gpg_homedir
+    File.join(TEMPORARY_DIR, 'gnupg')
+  end
+
+  def gpg_in_homedir(binary, dir, args)
+    Open3.capture2e(binary, '--homedir', dir, '--quiet', '--batch', '--no-options', *args)
+  end
+
+  # Populated with the gpg under test: a legacy run has to end up with a
+  # keyring in the format that binary reads, since the resource is what
+  # reads it back. Modern gpg reads either format, so inspection below
+  # stays on the one from this process' PATH.
+  def import_into_homedir(dir, *paths)
+    FileUtils.mkdir_p(dir)
+    FileUtils.chmod(0o700, dir)
+    paths.each do |path|
+      log, status = gpg_in_homedir(real_gpg, dir, ['--import', path])
+      raise "gpg --import #{path} into #{dir} failed:\n#{log}" unless status.success?
+    end
+  end
+
+  def homedir_fingerprints(dir)
+    return [] unless File.directory?(dir)
+
+    log, status = gpg_in_homedir('gpg', dir, ['--with-colons', '--fingerprint'])
+    raise "gpg --fingerprint in #{dir} failed:\n#{log}" unless status.success?
+
+    log.scan(/^fpr:{9}([0-9A-F]{40}):/).flatten
+  end
+
+  # Every path under the homedir, for the examples that assert a lookup
+  # changed nothing. Recursive and dotfile-aware on purpose: what gpg adds
+  # to a homedir it was only asked to read is a socket, a `pubring.db.lock`
+  # and a `.#lk...` file next to the database, none of which a listing of
+  # the top level alone would show.
+  def homedir_entries(dir)
+    return [] unless File.directory?(dir)
+
+    Dir.glob('**/*', File::FNM_DOTMATCH, base: dir)
+       .reject { |entry| File.basename(entry) == '.' }
+       .sort
+  end
+
+  # gpg leaves daemons holding the homedir, and they must go before the
+  # directory is wiped between examples. `--kill all` does not cover
+  # keyboxd - GnuPG 2.4.4 exits 0 and leaves it running - so that one is
+  # asked directly, through the socket gpgconf points at.
+  #
+  # A survivor is not merely untidy: its socket lives outside the homedir
+  # where the path is long (under /run/user, as on a CI runner) and is
+  # keyed by that path, so the next example reaches the old daemon, which
+  # is still writing into the directory that was deleted underneath it.
+  def kill_gpg_homedir(dir)
+    return unless File.directory?(dir)
+
+    Open3.capture2e('gpgconf', '--homedir', dir, '--kill', 'all')
+
+    socketdir, status = Open3.capture2e('gpgconf', '--homedir', dir, '--list-dirs', 'socketdir')
+    return unless status.success?
+
+    socket = File.join(socketdir.strip, 'S.keyboxd')
+    Open3.capture2e('gpg-connect-agent', '-S', socket, 'KILLKEYBOXD', '/bye')
   end
 
   def gpg_show_keys(path)
