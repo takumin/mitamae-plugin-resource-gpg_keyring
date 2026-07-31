@@ -416,13 +416,28 @@ module ::MItamae
         # A path that is already a directory takes none of that: `cd` into
         # it and it says where it is. This is also what keeps `/` out of
         # the walk, whose basename is `/` again.
+        #
+        # `$(...)` takes every trailing newline off what it captures, and a
+        # newline is as much part of a name as any other byte: a directory
+        # called "gnupg\n" comes back from `pwd` as "gnupg", which is a
+        # different directory - and one the target then reads as being
+        # inside. Every capture below therefore ends in a sentinel `x`,
+        # taken off again together with the single newline the command
+        # itself wrote; dirname, basename, readlink and pwd each write
+        # exactly one. The answer carries the same sentinel out, since the
+        # caller cannot otherwise tell the newline `pwd` adds from one the
+        # name ends with.
         RESOLVE_PATH = [
+          "nl='",
+          "'",
           'if [ -d "$1" ]; then',
-          '  cd -- "$1" 2>/dev/null && pwd -P',
-          '  exit',
+          '  cd -- "$1" 2>/dev/null || exit 1',
+          '  pwd -P',
+          '  printf x',
+          '  exit 0',
           'fi',
           'dir_of() {',
-          '  p=$(dirname -- "$1")',
+          '  p=$(dirname -- "$1"; printf x); p=${p%x}; p=${p%"$nl"}',
           '  t=',
           '  m=0',
           '  while [ ! -d "$p" ]; do',
@@ -430,30 +445,35 @@ module ::MItamae
           '    if [ -L "$p" ]; then',
           '      m=$((m + 1))',
           '      [ "$m" -gt 40 ] && return 1',
-          '      k=$(readlink -- "$p")',
-          '      case $k in /*) ;; *) k=$(dirname -- "$p")/$k ;; esac',
+          '      k=$(readlink -- "$p"; printf x); k=${k%x}; k=${k%"$nl"}',
+          '      case $k in',
+          '        /*) ;;',
+          '        *) q=$(dirname -- "$p"; printf x); q=${q%x}; q=${q%"$nl"}; k=$q/$k ;;',
+          '      esac',
           '      p=$k',
           '      continue',
           '    fi',
-          '    t=$(basename -- "$p")${t:+/$t}',
-          '    p=$(dirname -- "$p")',
+          '    s=$(basename -- "$p"; printf x); s=${s%x}; s=${s%"$nl"}',
+          '    t=$s${t:+/$t}',
+          '    p=$(dirname -- "$p"; printf x); p=${p%x}; p=${p%"$nl"}',
           '  done',
-          '  r=$(cd -- "$p" 2>/dev/null && pwd -P) || return 1',
+          '  r=$(cd -- "$p" 2>/dev/null && pwd -P && printf x) || return 1',
+          '  r=${r%x}; r=${r%"$nl"}',
           '  case $r in /) r= ;; esac',
-          '  printf "%s" "$r${t:+/$t}"',
+          '  printf "%sx" "$r${t:+/$t}"',
           '}',
-          'd=$(dir_of "$1") || exit 1',
-          'b=$(basename -- "$1")',
+          'd=$(dir_of "$1") || exit 1; d=${d%x}',
+          'b=$(basename -- "$1"; printf x); b=${b%x}; b=${b%"$nl"}',
           'n=0',
           'while [ -L "$d/$b" ]; do',
           '  n=$((n + 1))',
           '  [ "$n" -gt 40 ] && exit 1',
-          '  l=$(readlink -- "$d/$b")',
+          '  l=$(readlink -- "$d/$b"; printf x); l=${l%x}; l=${l%"$nl"}',
           '  case $l in /*) ;; *) l=$d/$l ;; esac',
-          '  d=$(dir_of "$l") || exit 1',
-          '  b=$(basename -- "$l")',
+          '  d=$(dir_of "$l") || exit 1; d=${d%x}',
+          '  b=$(basename -- "$l"; printf x); b=${b%x}; b=${b%"$nl"}',
           'done',
-          'printf "%s/%s" "$d" "$b"',
+          'printf "%s/%s\nx" "$d" "$b"',
         ].join("\n").freeze
 
         # A path that cannot be resolved at all - a symlink loop - is left
@@ -465,16 +485,22 @@ module ::MItamae
         # written: `/var/lib/new/..` with no `new` on disk resolves to
         # itself, and a target of `/var/lib/pubring.kbx` reads as outside
         # a homedir that `mkdir -p` is about to make mean `/var/lib`.
-        # Only the line terminator comes off, because everything else the
-        # resolver prints is the path: a directory may legitimately be
-        # named with a trailing space, and stripping it turns a homedir of
-        # `/srv/gnupg ` into `/srv/gnupg` while the target inside it keeps
-        # the space - two strings that no longer contain one another. The
-        # terminator is there because the directory case answers with
-        # `pwd`, which prints one; the other cases printf without.
+        # Only the resolver's own line terminator comes off, because
+        # everything else it prints is the path: a directory may
+        # legitimately be named with a trailing space, and stripping it
+        # turns a homedir of `/srv/gnupg ` into `/srv/gnupg` while the
+        # target inside it keeps the space - two strings that no longer
+        # contain one another. Which terminator is the resolver's is what
+        # the sentinel byte after it answers, a name being free to end in
+        # a newline too. Anything else coming back is not an answer at
+        # all, and is read as a resolver failure.
         def resolve_path(path)
           result = run_command(['sh', '-c', RESOLVE_PATH, 'sh', path], error: false)
-          normalize_path(result.exit_status == 0 ? result.stdout.chomp : File.expand_path(path))
+          if result.exit_status == 0 and result.stdout.end_with?("\nx")
+            normalize_path(result.stdout[0..-3])
+          else
+            normalize_path(File.expand_path(path))
+          end
         end
 
         # Drops `.` and `..` from an already resolved path, which is the

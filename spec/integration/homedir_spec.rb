@@ -136,6 +136,20 @@ RSpec.describe 'homedir' do
     expect(File.exist?(gpg_homedir)).to be(false)
   end
 
+  # A newline is a byte a name may end with and `$(...)` always takes off,
+  # so the homedir - resolved by `pwd` alone - and the target - whose
+  # parent goes through a capture - would disagree about which directory
+  # they mean.
+  it 'refuses the same collision when the homedir name ends in a newline' do
+    FileUtils.mkdir_p(temporary("gnupg\n"))
+    FileUtils.chmod(0o700, temporary("gnupg\n"))
+
+    run = run_mitamae('homedir_trailing_newline')
+    expect_mitamae_failure(run, /is a file gpg keeps in its homedir/)
+
+    expect(Dir.children(temporary("gnupg\n"))).to be_empty
+  end
+
   # Being one of those directories, rather than being under one: the write
   # would leave a plain file where gpg needs a directory.
   it 'refuses a keyring aimed at a directory gpg keeps in the homedir' do
