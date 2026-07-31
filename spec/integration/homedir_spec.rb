@@ -329,6 +329,44 @@ RSpec.describe 'homedir' do
     expect(homedir_entries(gpg_homedir)).to eq(before)
   end
 
+  # A box that has moved to keyboxd sets `use-keyboxd` once, in GnuPG's own
+  # configuration, and the homedirs on it then carry no common.conf at all
+  # while every key still lives in public-keys.d.
+  #
+  # What this pins is the lookup that finds those keys. The export that
+  # follows is gpg's own business and cannot be arranged from here: gpg
+  # reads `use-keyboxd` from common.conf and nowhere else - on the command
+  # line it answers "Please move option to common.conf" and goes on using
+  # the keybox - and a common.conf in the homedir is the thing this case
+  # is defined by not having. That half was checked by hand against a real
+  # /etc/gnupg/common.conf, where the run places the key and fetches
+  # nothing.
+  it 'finds the key when keyboxd is enabled in GnuPG own configuration' do
+    skip 'GnuPG 1.4 has no keyboxd' if legacy_gpg?
+
+    FileUtils.mkdir_p(gpg_homedir)
+    FileUtils.chmod(0o700, gpg_homedir)
+    File.write(File.join(gpg_homedir, 'common.conf'), "use-keyboxd\n")
+    import_into_homedir(gpg_homedir, fixture('valid-key.asc'))
+    kill_gpg_homedir(gpg_homedir)
+    # What such a homedir looks like: the store, and nothing local saying
+    # which store it is.
+    File.delete(File.join(gpg_homedir, 'common.conf'))
+    expect(File.exist?(File.join(gpg_homedir, 'public-keys.d', 'pubring.db'))).to be(true)
+
+    sysconfdir = temporary('etc-gnupg')
+    FileUtils.mkdir_p(sysconfdir)
+    File.write(File.join(sysconfdir, 'common.conf'), "use-keyboxd\n")
+
+    run = with_gpgconf_sysconfdir(sysconfdir) { run_mitamae('homedir_offline') }
+    expect_mitamae_success(run)
+
+    # The recipe's keyserver is a port that refuses, so a fetch would end
+    # the run: getting this far is itself the key having been found.
+    expect(run.log).to include('gpg key already in homedir')
+    expect(run.log).not_to include('--recv-keys')
+  end
+
   # A homedir with `use-keyboxd` keeps its keys in public-keys.d instead of
   # a keyring file, and is still a homedir the key can come out of.
   it 'reuses the key in a keyboxd-backed homedir' do

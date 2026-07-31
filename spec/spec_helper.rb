@@ -137,9 +137,36 @@ module GpgKeyringSpecHelper
     FileUtils.rm_rf(dir)
   end
 
+  # A gpgconf that answers --list-dirs sysconfdir with a directory of the
+  # example's choosing, handing every other call to the real binary. It
+  # is how GnuPG's system-wide common.conf is reached from a spec: the
+  # real one lives outside the repository, needs root to write, and would
+  # change every other gpg on the box for as long as an interrupted run
+  # left it there.
+  def with_gpgconf_sysconfdir(sysconfdir)
+    dir = File.join(BIN_DIR, 'gpgconf-stub')
+    FileUtils.mkdir_p(dir)
+    stub = File.join(dir, 'gpgconf')
+    File.write(stub, <<~SCRIPT)
+      #!/bin/sh
+      if [ "$1" = "--list-dirs" ] && [ "$2" = "sysconfdir" ]; then
+        printf '%s\\n' '#{sysconfdir}'
+        exit 0
+      fi
+      exec #{which('gpgconf')} "$@"
+    SCRIPT
+    FileUtils.chmod(0o755, stub)
+    @gpgconf_stub_dir = dir
+    yield
+  ensure
+    @gpgconf_stub_dir = nil
+    FileUtils.rm_rf(dir)
+  end
+
   def mitamae_env
     dirs = []
     dirs << @gpg_stub_dir if @gpg_stub_dir
+    dirs << @gpgconf_stub_dir if @gpgconf_stub_dir
     dirs << legacy_shim_dir if legacy_gpg?
     return {} if dirs.empty?
 

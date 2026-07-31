@@ -622,9 +622,32 @@ module ::MItamae
 
         # common.conf is read by every GnuPG component rather than by gpg's
         # option parser, so --no-options does not turn `use-keyboxd` off:
-        # what it says goes, and this reads the same file to find out.
+        # what it says goes, and this reads the same files to find out.
+        #
+        # Files, because there are two: the one in the homedir and a
+        # system-wide one next to the rest of GnuPG's configuration. A box
+        # that has moved to keyboxd sets it once, in the system file, and
+        # the homedirs on it then carry no common.conf at all while every
+        # key still lives in public-keys.d. Reading only the homedir's
+        # answers "no keys here" for those, which is the offline reuse
+        # this resource exists to do. Nothing spells `use-keyboxd` off
+        # again, so either file saying it settles the question.
+        #
+        # gpgconf is asked where the system file is rather than assuming
+        # /etc/gnupg, which is only where it usually ends up. On GnuPG 1.4
+        # there is neither gpgconf nor common.conf and both reads fail,
+        # which is the right answer there.
         def keyboxd_homedir?(homedir)
-          result = run_command(['cat', File.join(homedir, 'common.conf')], error: false)
+          return true if use_keyboxd?(File.join(homedir, 'common.conf'))
+
+          result = run_command(['gpgconf', '--list-dirs', 'sysconfdir'], error: false)
+          return false if result.exit_status != 0
+
+          use_keyboxd?(File.join(result.stdout.chomp, 'common.conf'))
+        end
+
+        def use_keyboxd?(path)
+          result = run_command(['cat', path], error: false)
           return false if result.exit_status != 0
 
           result.stdout.lines.any? {|line| line.strip.split(' ')[0].eql?('use-keyboxd') }
