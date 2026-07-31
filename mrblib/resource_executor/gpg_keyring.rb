@@ -270,8 +270,14 @@ module ::MItamae
         # that does not exist just fails ("no writable keyring found"). The
         # mode applies to directories this creates - an existing homedir
         # keeps whatever permissions its owner chose.
+        #
+        # `--` because the path is the recipe's: a relative one starting
+        # with `-` is a directory like any other, and without the
+        # terminator mkdir reads it as more options and the run ends on
+        # `invalid option`. Every other command handed a path from the
+        # recipe takes the same treatment.
         def prepare_homedir(homedir)
-          result = run_command(['mkdir', '-p', '-m', '0700', homedir], error: false)
+          result = run_command(['mkdir', '-p', '-m', '0700', '--', homedir], error: false)
           if result.exit_status != 0
             raise MItamae::Backend::CommandExecutionError, "gpg homedir: #{homedir}"
           end
@@ -314,8 +320,8 @@ module ::MItamae
           # else entirely. It is asked after those, not instead of them,
           # because only a target that already exists can be a link, and
           # theirs is the case where nothing is there yet.
-          linked = linked_homedir_entry(homedir)
-          if !linked.nil? and protected_homedir_entry?(linked)
+          linked = linked_homedir_entries(homedir).detect {|entry| protected_homedir_entry?(entry) }
+          unless linked.nil?
             raise "#{attributes.path} is a hard link to #{linked}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
           end
 
@@ -362,34 +368,37 @@ module ::MItamae
           end
         end
 
-        # The name, relative to the homedir, of the file the target is
-        # another name for - or nil if it is a name of its own. `-ef`
-        # compares device and inode, which is the only thing that answers
-        # this; the walk is over the homedir rather than over the target,
-        # since a link is found from either end and only one of the two is
-        # a directory that can be listed. One level down is as deep as it
-        # goes, which is as deep as gpg's own layout is.
-        LINKED_HOMEDIR_ENTRY = [
+        # The names, relative to the homedir, of the files the target is
+        # another name for. `-ef` compares device and inode, which is the
+        # only thing that answers this; the walk is over the homedir
+        # rather than over the target, since a link is found from either
+        # end and only one of the two is a directory that can be listed.
+        # One level down is as deep as it goes, which is as deep as gpg's
+        # own layout is.
+        #
+        # Every one of them, not the first: one inode can wear as many
+        # names as someone cares to give it, and `pubring.kbx` with an
+        # `aaa` beside it would otherwise be answered for by whichever the
+        # glob reached first. A NUL separates them, being the one byte a
+        # name cannot contain.
+        LINKED_HOMEDIR_ENTRIES = [
           '[ -f "$1" ] || exit 1',
           'cd -- "$2" 2>/dev/null || exit 1',
           'for c in * .* */*; do',
           '  [ -f "$c" ] || continue',
           '  [ "$1" -ef "$c" ] || continue',
-          '  printf "%s" "$c"',
-          '  exit 0',
+          '  printf "%s\\0" "$c"',
           'done',
-          'exit 1',
         ].join("\n").freeze
 
-        def linked_homedir_entry(homedir)
+        def linked_homedir_entries(homedir)
           # Resolved, because the walk runs from inside the homedir and a
           # path the recipe wrote relative to mitamae's working directory
           # would name nothing from there.
-          result = run_command(['sh', '-c', LINKED_HOMEDIR_ENTRY, 'sh', resolve_path(attributes.path), homedir], error: false)
-          return nil if result.exit_status != 0
+          result = run_command(['sh', '-c', LINKED_HOMEDIR_ENTRIES, 'sh', resolve_path(attributes.path), homedir], error: false)
+          return [] if result.exit_status != 0
 
-          entry = result.stdout
-          entry.empty? ? nil : entry
+          result.stdout.split("\0").reject {|entry| entry.empty? }
         end
 
         # Where the target sits under the homedir, or nil if it is outside
@@ -664,11 +673,11 @@ module ::MItamae
           names.all? {|name|
             parent = File.dirname(File.join(copy, name))
             if parent != copy
-              result = run_command(['mkdir', '-p', '-m', '0700', parent], error: false)
+              result = run_command(['mkdir', '-p', '-m', '0700', '--', parent], error: false)
               next false if result.exit_status != 0
             end
 
-            run_command(['cp', File.join(homedir, name), File.join(copy, name)], error: false).exit_status == 0
+            run_command(['cp', '--', File.join(homedir, name), File.join(copy, name)], error: false).exit_status == 0
           }
         end
 
@@ -714,7 +723,7 @@ module ::MItamae
         end
 
         def use_keyboxd?(path)
-          result = run_command(['cat', path], error: false)
+          result = run_command(['cat', '--', path], error: false)
           return false if result.exit_status != 0
 
           result.stdout.lines.any? {|line| line.strip.split(' ')[0].eql?('use-keyboxd') }

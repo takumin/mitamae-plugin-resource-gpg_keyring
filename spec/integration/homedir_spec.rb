@@ -115,12 +115,31 @@ RSpec.describe 'homedir' do
     expect(Dir.children(temporary('gnupg '))).to be_empty
   end
 
-  # Two names for one file, which no comparison of paths can see.
+  # Two names for one file, which no comparison of paths can see. The
+  # homedir holds a key other than the one asked for, so a run that gets
+  # past the guard has something to write and writes it through the link.
   it 'refuses a keyring hard-linked to one gpg keeps in the homedir' do
-    import_into_homedir(gpg_homedir, fixture('valid-key.asc'))
+    import_into_homedir(gpg_homedir, fixture('colon-uid.asc'))
     # Whichever of the two the gpg under test wrote.
     keyring = %w[pubring.kbx pubring.gpg].detect { |name| File.exist?(File.join(gpg_homedir, name)) }
     before = File.binread(File.join(gpg_homedir, keyring))
+    File.link(File.join(gpg_homedir, keyring), temporary('linked.gpg'))
+
+    run = run_mitamae('homedir_target_hard_link')
+    expect_mitamae_failure(run, /is a hard link to #{Regexp.escape(keyring)}, which gpg keeps in its homedir/)
+
+    expect(File.binread(File.join(gpg_homedir, keyring))).to eq(before)
+  end
+
+  # One inode wears as many names as it is given, and the glob reaches
+  # them in its own order: an unprotected one first must not answer for
+  # the keyring behind it.
+  it 'refuses a hard link the homedir also holds under a name of its own' do
+    import_into_homedir(gpg_homedir, fixture('colon-uid.asc'))
+    keyring = %w[pubring.kbx pubring.gpg].detect { |name| File.exist?(File.join(gpg_homedir, name)) }
+    before = File.binread(File.join(gpg_homedir, keyring))
+    # Sorts before either keyring name, so the glob finds it first.
+    File.link(File.join(gpg_homedir, keyring), File.join(gpg_homedir, 'aaa'))
     File.link(File.join(gpg_homedir, keyring), temporary('linked.gpg'))
 
     run = run_mitamae('homedir_target_hard_link')
