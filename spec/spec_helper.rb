@@ -178,13 +178,34 @@ module GpgKeyringSpecHelper
     FileUtils.rm_rf(dir)
   end
 
+  # Every run gets a HOME of its own, empty at the start of each example.
+  # The resource points every gpg invocation at a homedir of the run's
+  # own, so nothing should ever appear here - which is what the check
+  # after each example asserts, for all recipes at once rather than for
+  # the handful whose paths are known to probe.
+  def sandbox_home
+    File.join(TEMPORARY_DIR, 'home')
+  end
+
   def mitamae_env
     dirs = []
     dirs << @gpg_stub_dir if @gpg_stub_dir
     dirs << legacy_shim_dir if legacy_gpg?
-    return {} if dirs.empty?
 
-    { 'PATH' => (dirs + [ENV.fetch('PATH', '')]).join(File::PATH_SEPARATOR) }
+    FileUtils.mkdir_p(sandbox_home)
+    env = { 'HOME' => sandbox_home }
+    env['PATH'] = (dirs + [ENV.fetch('PATH', '')]).join(File::PATH_SEPARATOR) unless dirs.empty?
+    env
+  end
+
+  # gpg creates its default homedir on demand, so anything here is state
+  # a run left on a host that had none - the one thing the resource
+  # promises never to do.
+  def expect_untouched_home
+    return unless Dir.exist?(sandbox_home)
+
+    left = Dir.children(sandbox_home)
+    expect(left).to be_empty, "the run left #{left.inspect} in HOME; every gpg invocation should carry --homedir"
   end
 
   # --- running mitamae ----------------------------------------------------
@@ -347,5 +368,9 @@ RSpec.configure do |config|
 
   config.before do
     wipe_temporary
+  end
+
+  config.after do
+    expect_untouched_home
   end
 end
