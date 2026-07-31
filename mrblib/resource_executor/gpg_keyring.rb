@@ -145,6 +145,25 @@ module ::MItamae
           true
         end
 
+        # What `gpg --version` printed, or nil where it failed. Read once
+        # and shared by the two questions asked of it (the version and
+        # whether the build carries ECC), so the binary is only run once.
+        #
+        # This is the one probe that gets no --homedir: it reads no
+        # keyring and creates nothing, so there is no state for a homedir
+        # to keep out of the caller's way - unlike --list-packets, which
+        # does create the store it is pointed at. --no-options is still
+        # given, for the same reason the keyring invocations get it: a
+        # caller's gpg.conf has no business in a probe whose answer
+        # decides an error message.
+        def gpg_version_banner
+          if @gpg_version_banner.nil?
+            result = run_command(['gpg', '--no-options', '--version'], error: false)
+            @gpg_version_banner = result.exit_status == 0 ? result.stdout : false
+          end
+          @gpg_version_banner ? @gpg_version_banner : nil
+        end
+
         # The version of the gpg in use, or nil where its banner says
         # nothing recognizable. Anchored to GnuPG's own banner ("gpg
         # (GnuPG) 2.4.4", or "gpg (GnuPG/MacGPG2) 2.2.41" once repackaged)
@@ -153,8 +172,8 @@ module ::MItamae
         # read as gpg's.
         def gpg_version
           if @gpg_version.nil?
-            result = run_command(['gpg', '--version'], error: false)
-            match = result.exit_status == 0 ? /\(GnuPG[^)]*\)\s+(\d+\.\d+(\.\d+)?)/.match(result.stdout) : nil
+            banner = gpg_version_banner
+            match = banner ? /\(GnuPG[^)]*\)\s+(\d+\.\d+(\.\d+)?)/.match(banner) : nil
             @gpg_version = match ? match[1] : false
           end
           @gpg_version ? @gpg_version : nil
@@ -185,11 +204,11 @@ module ::MItamae
         # even on a version new enough to have it.
         def gpg_supports_ecc?
           if @gpg_supports_ecc.nil?
-            result = run_command(['gpg', '--version'], error: false)
+            banner = gpg_version_banner
             # Unreadable output must not turn into a claim about the
             # binary, so assume support and stay quiet.
-            @gpg_supports_ecc = result.exit_status != 0 ||
-                                ECC_ALGORITHM_NAMES.any? {|name| result.stdout.include?(name) }
+            @gpg_supports_ecc = banner.nil? ||
+                                ECC_ALGORITHM_NAMES.any? {|name| banner.include?(name) }
           end
           @gpg_supports_ecc
         end

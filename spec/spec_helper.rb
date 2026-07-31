@@ -117,16 +117,22 @@ module GpgKeyringSpecHelper
   # block, answering --version with the given shell snippet and handing
   # every other call to the real binary. Banners no real gpg prints are
   # the only way to drive the version check from a spec.
+  #
+  # The whole argument list is scanned rather than just $1: the version
+  # probe passes --no-options first, and matching on position alone would
+  # send it to the real binary and quietly disarm every example here.
   def with_gpg_stub(version_branch)
     dir = File.join(BIN_DIR, 'gpg-stub')
     FileUtils.mkdir_p(dir)
     stub = File.join(dir, 'gpg')
     File.write(stub, <<~SCRIPT)
       #!/bin/sh
-      if [ "$1" = "--version" ]; then
-        #{version_branch}
-        exit 0
-      fi
+      for arg in "$@"; do
+        if [ "$arg" = "--version" ]; then
+          #{version_branch}
+          exit 0
+        fi
+      done
       exec #{real_gpg} "$@"
     SCRIPT
     FileUtils.chmod(0o755, stub)
