@@ -255,6 +255,23 @@ RSpec.describe 'homedir' do
     expect(Dir.children(temporary('outside'))).to be_empty
   end
 
+  # The alias leads one level further in, and `..` climbs back to the
+  # homedir from there - which is where the kernel goes, and nowhere any
+  # spelling of the path says it does. Taking the dot segment out first
+  # would leave a path that never passes the homedir at all.
+  it 'refuses a keyring that climbs back into the homedir through an alias' do
+    FileUtils.mkdir_p(File.join(gpg_homedir, 'sub'))
+    FileUtils.chmod(0o700, gpg_homedir)
+    FileUtils.mkdir_p(temporary('outside'))
+    File.symlink(temporary('outside'), File.join(gpg_homedir, 'public-keys.d'))
+    File.symlink(File.join(gpg_homedir, 'sub'), temporary('alias'))
+
+    run = run_mitamae('homedir_alias_dot_segment')
+    expect_mitamae_failure(run, /is inside public-keys\.d, which gpg keeps in its homedir/)
+
+    expect(Dir.children(temporary('outside'))).to be_empty
+  end
+
   # The path as written says `keys/pubring.db`, which no list covers; where
   # it leads is keyboxd's database.
   it 'refuses a keyring aimed through a symlink to one of those directories' do

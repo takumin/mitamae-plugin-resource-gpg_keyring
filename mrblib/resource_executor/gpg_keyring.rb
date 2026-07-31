@@ -446,6 +446,16 @@ module ::MItamae
         # compared by device and inode, so every alias of it counts - and
         # what is left is the part gpg is going to name too.
         #
+        # The dot segments stay in the path the walk is given, which is
+        # what makes it a walk rather than a third string comparison.
+        # `..` is not the directory above the one that was written once a
+        # symlink is in front of it - it is the directory above the one
+        # the link led to - so an alias that points one level inside the
+        # homedir and a `..` behind it land back on the homedir, and only
+        # the kernel's own resolution of each step says so. `-ef` asks it
+        # at every step, on the path built so far and dot segments and
+        # all.
+        #
         # A homedir that is not there yet has no aliases and ends the walk
         # at once. Nothing inside it exists either, so the comparisons
         # above have nothing to be fooled by and answer it between them.
@@ -467,12 +477,22 @@ module ::MItamae
         ].join("\n").freeze
 
         def alias_homedir_relative_path(homedir)
-          target = normalize_path(File.expand_path(attributes.path))
-          result = run_command(['sh', '-c', ALIAS_HOMEDIR_RELATIVE, 'sh', target, homedir], error: false)
+          result = run_command(['sh', '-c', ALIAS_HOMEDIR_RELATIVE, 'sh', uncollapsed_path(attributes.path), homedir], error: false)
           return nil if result.exit_status != 0
 
           rest = result.stdout.split("\0")[0]
           rest.nil? || rest.empty? ? nil : rest
+        end
+
+        # An absolute path with whatever `.` and `..` it was written with
+        # still in it. File.expand_path takes them out, and the walk above
+        # is the one caller that must not have that done for it: taking
+        # them out is a decision about where a path goes that only the
+        # kernel is in a position to make. A relative path is made
+        # absolute against the working directory the same way, and by the
+        # same call, so the two agree about where that is.
+        def uncollapsed_path(path)
+          path.start_with?('/') ? path : File.join(File.expand_path('.'), path)
         end
 
         def relative_to(root, target)
