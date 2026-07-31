@@ -92,9 +92,16 @@ module ::MItamae
 
         # The directories gpg keeps under a homedir. Nothing inside them is
         # a place for a keyring either - public-keys.d holds the keyboxd
-        # database, and the rest hold key material and revocations.
+        # database, and the rest hold key material, revocations and CRLs.
+        #
+        # tofu.d is the split form of the tofu.db above: the 2.1 and 2.2
+        # releases write the TOFU state as a directory when
+        # --tofu-db-format is split, and later ones dropped the format
+        # without freeing the name. Both spellings are reserved because
+        # the homedir is the caller's - the gpg placing the keyring is not
+        # necessarily the only one that will read it.
         GPG_HOMEDIR_DIRS = %w[
-          public-keys.d private-keys-v1.d openpgp-revocs.d crls.d
+          public-keys.d private-keys-v1.d openpgp-revocs.d crls.d tofu.d
         ].freeze
 
         # What says a homedir has keys to look at, one list per store:

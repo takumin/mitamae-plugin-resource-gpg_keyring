@@ -202,6 +202,18 @@ RSpec.describe 'homedir' do
     expect(File.exist?(gpg_homedir)).to be(false)
   end
 
+  # The same, for the directory the 2.1/2.2 releases keep the split TOFU
+  # database in. The gpg running here writes the flat `tofu.db` and would
+  # never create it, which is exactly why the name has to be reserved
+  # rather than discovered: the homedir belongs to the caller, and theirs
+  # may be read by a gpg that does.
+  it 'refuses a keyring aimed at the split TOFU database directory' do
+    run = run_mitamae('homedir_target_tofu_dir')
+    expect_mitamae_failure(run, /is tofu\.d, which gpg keeps in its homedir/)
+
+    expect(File.exist?(gpg_homedir)).to be(false)
+  end
+
   # gpg renames a store to `<name>~` before rewriting it, so every name it
   # keeps has a second one - matched by the suffix rather than listed.
   it 'refuses a keyring aimed at the backup of one of those files' do
