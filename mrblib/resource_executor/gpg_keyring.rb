@@ -295,21 +295,29 @@ module ::MItamae
         def verify_target_outside_homedir(homedir)
           relative = homedir_relative_path(homedir)
 
-          unless relative.nil?
-            if protected_homedir_entry?(relative)
-              entry = relative.split('/')[0]
-              if relative.include?('/')
-                raise "#{attributes.path} is inside #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
-              end
-              # The target *is* one of gpg's directories, rather than
-              # something under one. A run that writes it leaves a plain
-              # file where a directory belongs, which gpg only finds out
-              # about when it next needs the directory ("Not a directory").
-              if GPG_HOMEDIR_DIRS.include?(entry)
-                raise "#{attributes.path} is #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
-              end
-              raise "#{attributes.path} is a file gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+          # Both ways of placing the target, because the write lands on
+          # gpg's file by either. Resolved says where the bytes end up;
+          # the paths as written say which name gpg is given, and gpg
+          # walks the same links the write does - a `public-keys.d` that
+          # is a symlink out of the homedir puts the resolved target
+          # somewhere else entirely while staying the path keyboxd creates
+          # its database at, which is then the file the keyring lands on.
+          [relative, lexical_homedir_relative_path(homedir)].each do |name|
+            next if name.nil?
+            next unless protected_homedir_entry?(name)
+
+            entry = name.split('/')[0]
+            if name.include?('/')
+              raise "#{attributes.path} is inside #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
             end
+            # The target *is* one of gpg's directories, rather than
+            # something under one. A run that writes it leaves a plain
+            # file where a directory belongs, which gpg only finds out
+            # about when it next needs the directory ("Not a directory").
+            if GPG_HOMEDIR_DIRS.include?(entry)
+              raise "#{attributes.path} is #{entry}, which gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
+            end
+            raise "#{attributes.path} is a file gpg keeps in its homedir, and the keyring is written after the homedir is updated; place the keyring outside #{homedir}"
           end
 
           # A hard link is a second name for one file, and no amount of
@@ -412,9 +420,18 @@ module ::MItamae
         # comparison could be of one path resolved against another as
         # written, which agrees on nothing.
         def homedir_relative_path(homedir)
-          root = resolve_path(homedir)
-          target = resolve_path(attributes.path)
+          relative_to(resolve_path(homedir), resolve_path(attributes.path))
+        end
 
+        # The same question put to the paths as written - expanded and
+        # normalized, never resolved - which is the only thing that still
+        # sees a reserved name whose own link leads out of the homedir.
+        def lexical_homedir_relative_path(homedir)
+          relative_to(normalize_path(File.expand_path(homedir)),
+                      normalize_path(File.expand_path(attributes.path)))
+        end
+
+        def relative_to(root, target)
           # `/` is its own separator, so the prefix is built rather than
           # concatenated: `//` matches nothing, and a homedir of `/` would
           # have every target read as outside it.

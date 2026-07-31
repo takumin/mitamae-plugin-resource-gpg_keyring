@@ -211,6 +211,21 @@ RSpec.describe 'homedir' do
     expect(File.exist?(gpg_homedir)).to be(false)
   end
 
+  # The reserved name is itself a symlink out of the homedir, so resolving
+  # the target puts it somewhere else entirely - while gpg, given the same
+  # name, walks that link too and creates its database at the other end.
+  it 'refuses a keyring aimed at a reserved name that leads out of the homedir' do
+    FileUtils.mkdir_p(gpg_homedir)
+    FileUtils.chmod(0o700, gpg_homedir)
+    FileUtils.mkdir_p(temporary('outside'))
+    File.symlink(temporary('outside'), File.join(gpg_homedir, 'public-keys.d'))
+
+    run = run_mitamae('homedir_target_keyboxd')
+    expect_mitamae_failure(run, /is inside public-keys\.d, which gpg keeps in its homedir/)
+
+    expect(Dir.children(temporary('outside'))).to be_empty
+  end
+
   # The path as written says `keys/pubring.db`, which no list covers; where
   # it leads is keyboxd's database.
   it 'refuses a keyring aimed through a symlink to one of those directories' do
