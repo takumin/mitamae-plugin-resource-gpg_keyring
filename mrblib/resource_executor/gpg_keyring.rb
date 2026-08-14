@@ -1059,7 +1059,22 @@ module ::MItamae
                 if desired.url
                   MItamae.logger.debug "gpg download url: #{desired.url}"
 
-                  download = File.join(workdir, desired.fingerprint)
+                  # The download gets a directory of its own inside workdir,
+                  # rather than sitting beside the throwaway homedir at the
+                  # top of it. Both names are the fingerprint, and what each
+                  # holds is not the same thing at all: `download` is
+                  # whatever the URL served, still unverified at this point,
+                  # while `export` is written from the key that passed every
+                  # check below. Only the second one is ever placed on the
+                  # target, and one directory per kind is what keeps the two
+                  # from ever reaching for the same path.
+                  #
+                  # 0700 because nothing outside this run reads either of
+                  # them: the import is a child of this process, and the
+                  # export is copied out by mitamae's file executor
+                  # in-process.
+                  Dir.mkdir(File.join(workdir, 'download'), 0700)
+                  download = File.join(workdir, 'download', desired.fingerprint)
 
                   result = with_retry("gpg download key: url: #{desired.url}") {
                     run_command(['curl', '-fsSL', '-o', download, desired.url], error: false)
@@ -1113,11 +1128,11 @@ module ::MItamae
                 raise MItamae::Backend::CommandExecutionError, "gpg export key: fingerprint: #{desired.fingerprint}"
               end
 
-              Dir.mkdir(File.join(workdir, 'download'), 0755)
-              File.open(File.join(workdir, 'download', desired.fingerprint), 'w') do |f|
+              Dir.mkdir(File.join(workdir, 'export'), 0700)
+              File.open(File.join(workdir, 'export', desired.fingerprint), 'w') do |f|
                 f.write(result.stdout)
               end
-              @tempfile = File.join(workdir, 'download', desired.fingerprint)
+              @tempfile = File.join(workdir, 'export', desired.fingerprint)
 
               # What a recipe's homedir receives is the exported keyring
               # itself: verified, and stripped to the same self-signatures
