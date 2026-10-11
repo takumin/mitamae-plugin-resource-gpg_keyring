@@ -25,7 +25,7 @@ packages:
   # it parse, is it safe, are its actions pinned.
   - name: rhysd/actionlint@v1.7.12
   - name: zizmorcore/zizmor@v1.28.0
-  - name: suzuki-shunsuke/pinact@v4.1.1
+  - name: suzuki-shunsuke/pinact@v5.0.0
   # actionlint shells out to shellcheck for `run:` blocks when it is on
   # PATH. Pinning it keeps the findings identical everywhere, instead of
   # depending on whatever version a runner image happens to ship.
