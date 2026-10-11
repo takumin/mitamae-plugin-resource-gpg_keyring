@@ -35,7 +35,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
         with:
-          ruby-version: '3.4'
+          ruby-version: '4.0'
 
       # Only puts aqua on PATH; `rake tool` is what installs the pinned
       # CLI tools, so CI and a laptop go through the same code path.
@@ -119,7 +119,7 @@ jobs:
       - name: Set up Ruby
         uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
         with:
-          ruby-version: '3.4'
+          ruby-version: '4.0'
 
       - name: Install gems
         run: bundle install
