@@ -24,7 +24,7 @@ packages:
   # The three angles `rake lint` looks at .github/workflows/ from: does
   # it parse, is it safe, are its actions pinned.
   - name: rhysd/actionlint@v1.7.12
-  - name: zizmorcore/zizmor@v1.30.1
+  - name: zizmorcore/zizmor@v1.31.1
   - name: suzuki-shunsuke/pinact@v5.0.0
   # actionlint shells out to shellcheck for `run:` blocks when it is on
   # PATH. Pinning it keeps the findings identical everywhere, instead of
