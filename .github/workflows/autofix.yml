@@ -34,12 +34,12 @@ jobs:
           persist-credentials: false
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@20eb24b0d509e2b9ed9b6d42ddfeb992915e0564 # v1.341.0
+        uses: ruby/setup-ruby@145243922b4465b78e04dd66294782c7de45901f # v1.345.0
         with:
           ruby-version: '4.0'
 
       - name: Set up aqua
-        uses: aquaproj/aqua-installer@611554c6f0137ba41c8dd15aca8bee82504ea461 # v4.1.1
+        uses: aquaproj/aqua-installer@b8be739961814ee66b9e0d505f4d5de0d2eff047 # v4.1.2
         with:
           aqua_version: v2.66.1
           enable_aqua_install: 'false'
